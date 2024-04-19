@@ -24,7 +24,7 @@ jet\_serial: jet but runs on the host on a single thread.
 #### Helpers
 pstat: Given a metis graph file, partition file, and k-value, will print out quality information on the partition.
 
-### Using Jet in Your Code
+### Using Jet Partitioner in Your Code
 We can not provide an option to compile a library due to the use of templates. However, you can import "jet.hpp" into your code to use the partitioner via the "jet\_partitioner::partition" method. Note that this requires you to add our source directory to your include path and also to link our dependencies. This method currently always uses the default coarsening algorithm.
 
 ### Input Format
