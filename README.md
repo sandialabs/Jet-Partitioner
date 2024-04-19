@@ -6,8 +6,8 @@ For details about the algorithm, please see https://arxiv.org/abs/2304.13194
 
 ## Dependencies
 
-Kokkos (https://github.com/kokkos/kokkos): Enables performance portable parallelism. 
-KokkosKernels (https://github.com/kokkos/kokkos-kernels): Necessary only for KokkosSparse::CrsMatrix class. 
+Kokkos (https://github.com/kokkos/kokkos): Enables performance portable parallelism.  
+KokkosKernels (https://github.com/kokkos/kokkos-kernels): Necessary only for KokkosSparse::CrsMatrix class.  
 Metis (https://github.com/KarypisLab/METIS): Used for initial partitioning of coarsest graph.
 
 ## Usage
