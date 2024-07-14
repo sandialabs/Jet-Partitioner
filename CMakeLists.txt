@@ -1,4 +1,3 @@
-#IMPORTANT: Use the cmake flag -DCMAKE_CXX_COMPILER=/path/to/your/nvcc_wrapper
 cmake_minimum_required(VERSION 3.18)
 project(jetpartition CXX)
 set(CMAKE_CXX_STANDARD 17)
