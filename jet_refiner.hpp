@@ -253,17 +253,18 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cda
     //write all unlocked vertices that passed the above filter into an unordered list
     //output count of such vertices into num_pos
     Kokkos::parallel_scan("filter potentially viable moves", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-            part_t p = part(i);
-            part_t best = dest_part(i);
-            if(p != best && lock_bit(i) == 0){
-                if(final){
-                    swap_scratch(update) = i;
-                    pregain(i) = save_gains(i);
-                }
-                update++;
-            } else if(final){
-                pregain(i) = GAIN_MIN;
+        part_t p = part(i);
+        part_t best = dest_part(i);
+        if(p != best && lock_bit(i) == 0){
+            if(final){
+                swap_scratch(update) = i;
+                pregain(i) = save_gains(i);
             }
+            update++;
+        } else if(final){
+            pregain(i) = GAIN_MIN;
+            lock_bit(i) = 0;
+        }
     }, num_pos);
     //truncate scratch views by num_pos
     vtx_view_t pos_moves = Kokkos::subview(swap_scratch, std::make_pair(static_cast<ordinal_t>(0), num_pos));
@@ -301,27 +302,22 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cda
         t.team_barrier();
         Kokkos::single(Kokkos::PerTeam(t), [&](){
             if(igain + change >= 0){
-                should_swap(t.league_rank()) = 1;
+                lock_bit(i) = 1;
             }
         });
     });
     vtx_view_t swaps2 = Kokkos::subview(scratch.vtx2, std::make_pair(static_cast<ordinal_t>(0), num_pos));
     //scan all vertices that passed the post filter
     Kokkos::parallel_scan("filter beneficial moves", policy_t(0, num_pos), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-            if(should_swap(i)){
-                if(final){
-                    swaps2(update) = pos_moves(i);
-                    //unset this because this memory is used for other things
-                    should_swap(i) = 0;
-                }
-                update++;
+        ordinal_t v = pos_moves(i);
+        if(lock_bit(v)){
+            if(final){
+                swaps2(update) = v;
             }
+            update++;
+        }
     }, num_pos);
     pos_moves = Kokkos::subview(swaps2, std::make_pair(static_cast<ordinal_t>(0), num_pos));
-    Kokkos::deep_copy(exec_space(), lock_bit, 0);
-    Kokkos::parallel_for("set lock bit", policy_t(0, num_pos), KOKKOS_LAMBDA(const ordinal_t x){
-        lock_bit(pos_moves(x)) = 1;
-    });
     return pos_moves;
 }
 
