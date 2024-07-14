@@ -99,7 +99,7 @@ public:
         wgt_view_t vtx_w;
         coarse_map interp_mtx;
         int level;
-        bool uniform_weights;
+        bool uniform_weights = false;
     };
 
     // define behavior-controlling enums
@@ -480,110 +480,6 @@ coarse_map generate_coarse_mapping(const matrix_t g,
     Kokkos::fence();
     experiment.addMeasurement(Measurement::Map, timer.seconds());
     return interpolation_graph;
-}
-
-void dump_stats(const matrix_t g, const wgt_view_t vtx_w_dev){
-    typename edge_view_t::HostMirror row_map("row map mirror", g.numRows() + 1);
-    typename wgt_view_t::HostMirror values("entries mirror", g.nnz());
-    typename wgt_view_t::HostMirror vtx_w("vtx_w mirror", g.numRows());
-    Kokkos::deep_copy(row_map, g.graph.row_map);
-    Kokkos::deep_copy(values, g.values);
-    Kokkos::deep_copy(vtx_w, vtx_w_dev);
-    std::ofstream degree_out("dump/degree.txt");
-    std::ofstream vtx_w_out("dump/vtx_w.txt");
-    std::ofstream wgt_degree_out("dump/wgt_degree.txt");
-    for(ordinal_t i = 0; i < g.numRows(); i++){
-        degree_out << row_map(i+1) - row_map(i) << std::endl;
-        vtx_w_out << vtx_w(i) << std::endl;
-        edge_offset_t wgt_degree = 0;
-        for(edge_offset_t j = row_map(i); j < row_map(i+1); j++){
-            wgt_degree += values(j);
-        }
-        wgt_degree_out << wgt_degree << std::endl;
-    }
-    degree_out.close();
-    wgt_degree_out.close();
-    vtx_w_out.close();
-}
-
-std::list<coarse_level_triple> load_coarse(){
-    FILE* cgfp = fopen("/home/mike/workspace/mt-KaHIP/coarse_graphs.out", "r");
-    int size = 0;
-    fread(&size, sizeof(int), 1, cgfp);
-    printf("Number of graphs: %i\n", size);
-    std::list<coarse_level_triple> levels;
-    ordinal_t prev_n = 0;
-    for(int i = 0; i < size; i++){
-        coarse_level_triple level;
-        level.level = i + 1;
-        ordinal_t N = 0;
-        fread(&N, sizeof(ordinal_t), 1, cgfp);
-        edge_offset_t M = 0;
-        fread(&M, sizeof(edge_offset_t), 1, cgfp);
-        edge_view_t rows("rows", N + 1);
-        auto rows_m = Kokkos::create_mirror_view(rows);
-        fread(rows_m.data(), sizeof(edge_offset_t), N + 1, cgfp);
-        Kokkos::deep_copy(rows, rows_m);
-        vtx_view_t entries("entries", M);
-        auto entries_m = Kokkos::create_mirror_view(entries);
-        fread(entries_m.data(), sizeof(ordinal_t), M, cgfp);
-        Kokkos::deep_copy(entries, entries_m);
-        wgt_view_t values("values", M);
-        auto values_m = Kokkos::create_mirror_view(values);
-        fread(values_m.data(), sizeof(scalar_t), M, cgfp);
-        Kokkos::deep_copy(values, values_m);
-        graph_type graph(entries, rows);
-        matrix_t g("g", N, values, graph);
-        level.mtx = g;
-        wgt_view_t vtx_wgts("vtx wgts", N);
-        auto vtx_wgts_m = Kokkos::create_mirror_view(vtx_wgts);
-        fread(vtx_wgts_m.data(), sizeof(scalar_t), N, cgfp);
-        Kokkos::deep_copy(vtx_wgts, vtx_wgts_m);
-        level.vtx_w = vtx_wgts;
-        if(level.level > 1){
-            vtx_view_t i_entries("entries", prev_n);
-            auto i_entries_m = Kokkos::create_mirror_view(i_entries);
-            fread(i_entries_m.data(), sizeof(ordinal_t), prev_n, cgfp);
-            Kokkos::deep_copy(i_entries, i_entries_m);
-            coarse_map i_g;
-            i_g.coarse_vtx = N;
-            i_g.map = i_entries;
-            level.interp_mtx = i_g;
-        }
-        prev_n = N;
-        levels.push_back(level);
-    }
-    fclose(cgfp);
-    return levels;
-}
-
-void dump_coarse(std::list<coarse_level_triple> levels){
-    FILE* cgfp = fopen("/home/mike/workspace/mt-KaHIP/coarse_graphs.out", "w");
-    int size = levels.size();
-    fwrite(&size, sizeof(int), 1, cgfp);
-    ordinal_t prev_n = 0;
-    for(auto level : levels){
-        matrix_t g = level.mtx;
-        ordinal_t N = g.numRows();
-        edge_offset_t M = g.nnz();
-        auto rows = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), g.graph.row_map);
-        auto entries = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), g.graph.entries);
-        auto values = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), g.values);
-        auto vtx_wgts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), level.vtx_w);
-        fwrite(&N, sizeof(ordinal_t), 1, cgfp);
-        fwrite(&M, sizeof(edge_offset_t), 1, cgfp);
-        fwrite(rows.data(), sizeof(edge_offset_t), N+1, cgfp);
-        fwrite(entries.data(), sizeof(ordinal_t), M, cgfp);
-        fwrite(values.data(), sizeof(scalar_t), M, cgfp);
-        fwrite(vtx_wgts.data(), sizeof(scalar_t), N, cgfp);
-        if(level.level > 1){
-            coarse_map interp_mtx = level.interp_mtx;
-            auto i_entries = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), interp_mtx.map);
-            fwrite(i_entries.data(), sizeof(ordinal_t), prev_n, cgfp);
-        }
-        prev_n = N;
-    }
-    fclose(cgfp);
 }
 
 std::list<coarse_level_triple> generate_coarse_graphs(const matrix_t fine_g, const wgt_view_t vweights, ExperimentLoggerUtil<scalar_t>& experiment, bool uniform_eweights = false) {

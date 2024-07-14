@@ -46,50 +46,21 @@
 using namespace jet_partitioner;
 
 part_vt partition(value_t& edge_cut,
-                                  const config_t& config,
-                                  matrix_t g,
-                                  wgt_view_t vweights,
-                                  bool uniform_ew,
-                                  ExperimentLoggerUtil<value_t>& experiment) {
+                    const config_t& config,
+                    ExperimentLoggerUtil<value_t>& experiment) {
 
     using coarsener_t = contracter<matrix_t>;
-    using init_t = initial_partitioner<matrix_t, part_t>;
     using uncoarsener_t = uncoarsener<matrix_t, part_t>;
     using coarse_level_triple = typename coarsener_t::coarse_level_triple;
-    coarsener_t coarsener;
 
-    std::list<coarse_level_triple> cg_list;
+    std::list<coarse_level_triple> cg_list = load_coarse();
     Kokkos::fence();
     Kokkos::Timer t;
     double start_time = t.seconds();
     part_t k = config.num_parts;
-
-    switch(config.coarsening_alg){
-        case 0:
-            coarsener.set_heuristic(coarsener_t::MtMetis);
-            break;
-        case 1:
-            coarsener.set_heuristic(coarsener_t::HECv1);
-            break;
-        case 2:
-            coarsener.set_heuristic(coarsener_t::Match);
-            break;
-        default:
-            coarsener.set_heuristic(coarsener_t::MtMetis);
-    }
-    int cutoff = k*8;
-    if(cutoff > 1024){
-        cutoff = k*2;
-        cutoff = std::max(1024, cutoff);
-    }
-    coarsener.set_coarse_vtx_cutoff(cutoff);
-    coarsener.set_min_allowed_vtx(cutoff / 4);
-    cg_list = coarsener.generate_coarse_graphs(g, vweights, experiment, uniform_ew);
-    Kokkos::fence();
     double fin_coarsening_time = t.seconds();
     double imb_ratio = config.max_imb_ratio;
-    part_vt coarsest_p = init_t::metis_init(cg_list.back().mtx, cg_list.back().vtx_w, k, imb_ratio);
-    //part_vt coarsest_p = init_t::random_init(cg_list.back().vtx_w, k, imb_ratio);
+    part_vt coarsest_p = load_coarse_part(cg_list.back().mtx.numRows());
     Kokkos::fence();
     experiment.addMeasurement(Measurement::InitPartition, t.seconds() - fin_coarsening_time);
     part_vt part = uncoarsener_t::uncoarsen(cg_list, coarsest_p, k, imb_ratio
@@ -118,34 +89,26 @@ void degree_weighting(const matrix_t& g, wgt_view_t vweights){
 
 int main(int argc, char **argv) {
 
-    if (argc < 3) {
+    if (argc < 2) {
         std::cerr << "Insufficient number of args provided" << std::endl;
-        std::cerr << "Usage: " << argv[0] << " <metis_graph_file> <config_file> <optional partition_output_filename> <optional metrics_filename>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <config_file> <optional partition_output_filename> <optional metrics_filename>" << std::endl;
         return -1;
     }
     config_t config;
-    char *filename = argv[1];
-    if(!load_config(config, argv[2])) return -1;
+    if(!load_config(config, argv[1])) return -1;
     char *part_file = nullptr;
     char *metrics = nullptr;
-    if(argc >= 4){
-        part_file = argv[3];
+    if(argc >= 3){
+        part_file = argv[2];
     }
-    if(argc >= 5){
-        metrics = argv[4];
+    if(argc >= 4){
+        metrics = argv[3];
     }
 
     Kokkos::initialize();
     //must scope kokkos-related data
     //so that it falls out of scope b4 finalize
     {
-        matrix_t g;
-        bool uniform_ew = false;
-        if(!load_metis_graph(g, uniform_ew, filename)) return -1;
-        std::cout << "vertices: " << g.numRows() << "; edges: " << g.nnz() / 2 << std::endl;
-        wgt_view_t vweights("vertex weights", g.numRows());
-        Kokkos::deep_copy(vweights, 1);
-
         part_vt best_part;
 
         value_t edgecut_min = std::numeric_limits<value_t>::max();
@@ -153,8 +116,7 @@ int main(int argc, char **argv) {
             Kokkos::fence();
             value_t edgecut = 0;
             ExperimentLoggerUtil<value_t> experiment;
-            part_vt part = partition(edgecut, config, g, vweights, uniform_ew,
-                experiment);
+            part_vt part = partition(edgecut, config, experiment);
 
             if (edgecut < edgecut_min) {
                 edgecut_min = edgecut;
@@ -169,7 +131,7 @@ int main(int argc, char **argv) {
             }
             if(metrics != nullptr) experiment.log(metrics, first, last);
         }
-        std::cout << "graph " << filename << ", min edgecut found is " << edgecut_min << std::endl;
+        std::cout << "Imported coarse graphs, min edgecut found is " << edgecut_min << std::endl;
 
         if(part_file != nullptr && config.num_iter > 0) write_part(best_part, part_file);
     }

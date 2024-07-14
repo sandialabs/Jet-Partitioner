@@ -48,6 +48,7 @@
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
 #include "part_stat.hpp"
+#include "io.hpp"
 
 namespace jet_partitioner {
 
@@ -77,14 +78,6 @@ public:
     using gain_t = typename ref_t::gain_t;
     using gain_vt = typename ref_t::gain_vt;
     using stat = part_stat<matrix_t, part_t>;
-
-static void dump_coarse_part(part_vt part){
-    FILE* cgfp = fopen("/home/mike/workspace/mt-KaHIP/coarse_part.out", "wb");
-    ordinal_t n = part.extent(0);
-    auto part_m = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), part);
-    fwrite(part_m.data(), sizeof(part_t), n, cgfp);
-    fclose(cgfp);
-}
 
 static double get_max_imb(gain_vt part_sizes, part_t k){
     typename gain_vt::HostMirror ps_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), part_sizes);
@@ -126,8 +119,7 @@ static part_vt multilevel_jet(std::list<clt> cg_list, part_vt coarse_guess, part
             }
             if(imb <= imb_ratio){
                 dump_coarse_part(coarse_guess);
-                coarsener_t coarsener;
-                coarsener.dump_coarse(cg_list);
+                dump_coarse(cg_list);
                 is_dumped = true;
                 Kokkos::fence();
                 t.reset();

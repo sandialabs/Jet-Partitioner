@@ -74,16 +74,6 @@ public:
     using policy_t = Kokkos::RangePolicy<exec_space>;
     using coarsener_t = contracter<matrix_t>;
 
-static part_vt load_coarse_part(ordinal_t n){
-    FILE* cgfp = fopen("/home/mike/workspace/mt-KaHIP/coarse_part.out", "r");
-    part_vt part("part", n);
-    auto part_m = Kokkos::create_mirror_view(part);
-    fread(part_m.data(), sizeof(part_t), n, cgfp);
-    Kokkos::deep_copy(part, part_m);
-    fclose(cgfp);
-    return part;
-}
-
 template <class dst_vt, class src_vt>
 static void copy(dst_vt dst, src_vt src){
     Kokkos::parallel_for("copy", policy_t(0, src.extent(0)), KOKKOS_LAMBDA(const int i){
@@ -120,6 +110,10 @@ static part_vt metis_init(matrix_t g, wgt_view_t vtx_w, int k, double imb_ratio)
     int ret = METIS_PartGraphKway(&n, &nweights, xadj.data(), adjncy.data(),
 				       vtx_wm.data(), NULL, adjcwgt.data(), &k, NULL,
 				       &imbalance, NULL, &ec, pm.data());
+    if(ret != METIS_OK){
+        std::cerr << "Metis could not partition coarsest graph. Exiting..." << std::endl;
+        exit(-1);
+    }
     Kokkos::deep_copy(part_metis, pm);
     part_vt part("part", n);
     copy<part_vt, metis_vt>(part, part_metis);

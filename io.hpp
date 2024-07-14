@@ -38,6 +38,7 @@
 // ************************************************************************
 #pragma once
 #include "defs.h"
+#include "contract.hpp"
 #include <filesystem>
 #include <sstream>
 #include <string>
@@ -265,6 +266,105 @@ part_vt load_part(ordinal_t n, const char *fname){
     ifp.close();
     Kokkos::deep_copy(part_d, part);
     return part_d;
+}
+
+std::list<typename contracter<matrix_t>::coarse_level_triple> load_coarse(){
+    using coarse_level_triple = typename contracter<matrix_t>::coarse_level_triple;
+    FILE* cgfp = fopen("coarse_graphs.out", "r");
+    int size = 0;
+    fread(&size, sizeof(int), 1, cgfp);
+    std::cout << "Importing " << size << " coarsened graphs" << std::endl;
+    std::list<coarse_level_triple> levels;
+    ordinal_t prev_n = 0;
+    for(int i = 0; i < size; i++){
+        coarse_level_triple level;
+        level.level = i + 1;
+        ordinal_t N = 0;
+        fread(&N, sizeof(ordinal_t), 1, cgfp);
+        edge_offset_t M = 0;
+        fread(&M, sizeof(edge_offset_t), 1, cgfp);
+        edge_view_t rows("rows", N + 1);
+        auto rows_m = Kokkos::create_mirror_view(rows);
+        fread(rows_m.data(), sizeof(edge_offset_t), N + 1, cgfp);
+        Kokkos::deep_copy(rows, rows_m);
+        vtx_view_t entries("entries", M);
+        auto entries_m = Kokkos::create_mirror_view(entries);
+        fread(entries_m.data(), sizeof(ordinal_t), M, cgfp);
+        Kokkos::deep_copy(entries, entries_m);
+        wgt_view_t values("values", M);
+        auto values_m = Kokkos::create_mirror_view(values);
+        fread(values_m.data(), sizeof(value_t), M, cgfp);
+        Kokkos::deep_copy(values, values_m);
+        graph_t graph(entries, rows);
+        matrix_t g("g", N, values, graph);
+        level.mtx = g;
+        wgt_view_t vtx_wgts("vtx wgts", N);
+        auto vtx_wgts_m = Kokkos::create_mirror_view(vtx_wgts);
+        fread(vtx_wgts_m.data(), sizeof(value_t), N, cgfp);
+        Kokkos::deep_copy(vtx_wgts, vtx_wgts_m);
+        level.vtx_w = vtx_wgts;
+        if(level.level > 1){
+            vtx_view_t i_entries("entries", prev_n);
+            auto i_entries_m = Kokkos::create_mirror_view(i_entries);
+            fread(i_entries_m.data(), sizeof(ordinal_t), prev_n, cgfp);
+            Kokkos::deep_copy(i_entries, i_entries_m);
+            typename contracter<matrix_t>::coarse_map i_g;
+            i_g.coarse_vtx = N;
+            i_g.map = i_entries;
+            level.interp_mtx = i_g;
+        }
+        prev_n = N;
+        levels.push_back(level);
+    }
+    fclose(cgfp);
+    return levels;
+}
+
+void dump_coarse(std::list<typename contracter<matrix_t>::coarse_level_triple> levels){
+    FILE* cgfp = fopen("coarse_graphs.out", "w");
+    int size = levels.size();
+    fwrite(&size, sizeof(int), 1, cgfp);
+    ordinal_t prev_n = 0;
+    for(auto level : levels){
+        matrix_t g = level.mtx;
+        ordinal_t N = g.numRows();
+        edge_offset_t M = g.nnz();
+        auto rows = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), g.graph.row_map);
+        auto entries = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), g.graph.entries);
+        auto values = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), g.values);
+        auto vtx_wgts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), level.vtx_w);
+        fwrite(&N, sizeof(ordinal_t), 1, cgfp);
+        fwrite(&M, sizeof(edge_offset_t), 1, cgfp);
+        fwrite(rows.data(), sizeof(edge_offset_t), N+1, cgfp);
+        fwrite(entries.data(), sizeof(ordinal_t), M, cgfp);
+        fwrite(values.data(), sizeof(value_t), M, cgfp);
+        fwrite(vtx_wgts.data(), sizeof(value_t), N, cgfp);
+        if(level.level > 1){
+            typename contracter<matrix_t>::coarse_map interp_mtx = level.interp_mtx;
+            auto i_entries = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), interp_mtx.map);
+            fwrite(i_entries.data(), sizeof(ordinal_t), prev_n, cgfp);
+        }
+        prev_n = N;
+    }
+    fclose(cgfp);
+}
+
+void dump_coarse_part(part_vt part){
+    FILE* cgfp = fopen("coarse_part.out", "wb");
+    ordinal_t n = part.extent(0);
+    auto part_m = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), part);
+    fwrite(part_m.data(), sizeof(part_t), n, cgfp);
+    fclose(cgfp);
+}
+
+part_vt load_coarse_part(ordinal_t n){
+    FILE* cgfp = fopen("coarse_part.out", "r");
+    part_vt part("part", n);
+    auto part_m = Kokkos::create_mirror_view(part);
+    fread(part_m.data(), sizeof(part_t), n, cgfp);
+    Kokkos::deep_copy(part, part_m);
+    fclose(cgfp);
+    return part;
 }
 
 }
