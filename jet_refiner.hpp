@@ -268,7 +268,6 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cda
     }, num_pos);
     //truncate scratch views by num_pos
     vtx_view_t pos_moves = Kokkos::subview(swap_scratch, std::make_pair(static_cast<ordinal_t>(0), num_pos));
-    vtx_view_t should_swap = Kokkos::subview(scratch.zeros1, std::make_pair(static_cast<ordinal_t>(0), num_pos));
     //in this kernel every potential move from the previous filters
     //is reevaluated by considering the effect of the other potential moves
     //a move is considered to occur before another according to their potential gains
