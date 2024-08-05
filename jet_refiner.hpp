@@ -195,7 +195,7 @@ refine_data clone_refine_data(refine_data& rhs){
 
 //determines which vertices (if any) should be moved to another part to decrease cutsize
 //8 kernels, 2 device-host syncs
-vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cdata, scratch_mem& scratch, bool top_level){
+vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cdata, scratch_mem& scratch, double filter_ratio){
     const matrix_t& g = prob.g;
     ordinal_t n = g.numRows();
     ordinal_t num_pos = 0;
@@ -206,8 +206,6 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cda
     gain_vt conn_vals = cdata.conn_vals;
     gain_vt save_gains = scratch.gain_persistent;
     vtx_view_t lock_bit = cdata.lock_bit;
-    double filter_ratio = 0.75;
-    if(top_level) filter_ratio = 0.25;
     Kokkos::parallel_for("select destination part (lp)", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
         part_t best = cdata.dest_cache(i);
         if(best != NULL_PART) {
@@ -1357,11 +1355,13 @@ void jet_refine(const matrix_t g, const part_t k, const double imb_ratio, wgt_vi
     //repeat until 12 phases since a significant
     //improvement in cut or balance
     //this accounts for at least 3 full lp+rebalancing cycles
+    double filter_ratio = 0.75;
+    if(level == 0) filter_ratio = 0.25;
     while(count++ <= 11){
         iter_count++;
         vtx_view_t moves;
         if(curr_state.total_imb <= imb_max){
-            moves = jet_lp(prob, part, cdata, scratch, (level == 0));
+            moves = jet_lp(prob, part, cdata, scratch, filter_ratio);
             balance_counter = 0;
             lab_counter++;
         } else {
