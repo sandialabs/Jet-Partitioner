@@ -39,7 +39,6 @@
 #pragma once
 #include "defs.h"
 #include "contract.hpp"
-#include <filesystem>
 #include <sstream>
 #include <string>
 #include <iostream>
@@ -78,36 +77,6 @@ bool load_config(config_t& c, const char* config_f) {
     return true;
 }
 
-bool load_binary_graph(matrix_t& g, const char *csr_filename) {
-
-    FILE *infp = fopen(csr_filename, "rb");
-    if (infp == NULL) {
-        printf("Error: Could not open input file %s. Exiting ...\n", csr_filename);
-        return false;
-    }
-    long n, m;
-    long unused_vals[4];
-    if(fread(&n, sizeof(long), 1, infp) == 0) return false;
-    if(fread(&m, sizeof(long), 1, infp) == 0) return false;
-    if(fread(unused_vals, sizeof(long), 4, infp) != 4) return false;
-    edge_view_t row_map("row map", n + 1);
-    edge_mirror_t row_map_m = Kokkos::create_mirror_view(row_map);
-    vtx_view_t entries("entries", m);
-    vtx_mirror_t entries_m = Kokkos::create_mirror_view(entries);
-    size_t nitems_read = fread(row_map_m.data(), sizeof(edge_offset_t), n+1, infp);
-    if(nitems_read != ((size_t)n+1)) return false;
-    nitems_read = fread(entries_m.data(), sizeof(ordinal_t), m, infp);
-    if(nitems_read != ((size_t) m)) return false;
-    fclose(infp);
-    Kokkos::deep_copy(row_map, row_map_m);
-    Kokkos::deep_copy(entries, entries_m);
-    wgt_view_t values(Kokkos::ViewAllocateWithoutInitializing("values"), m);
-    Kokkos::deep_copy(values, 1);
-    graph_t g_graph(entries, row_map);
-    g = matrix_t("input graph", n, values, g_graph);
-    return true;
-}
-
 template<typename t>
 t fast_atoi( const char*& str )
 {
@@ -131,9 +100,12 @@ bool load_metis_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
         std::cerr << "FATAL ERROR: Could not open metis graph file " << fname << std::endl;
         return false;
     }
-    size_t sz = std::filesystem::file_size(fname);
-    char* s = new char[sz + 1];
+    infp.seekg(0, std::ios::end);
+    size_t sz = infp.tellg();
     std::cout << "Reading " << sz << " bytes from " << fname << std::endl;
+    infp.seekg(0, std::ios::beg);
+    //1 for extra newline if needed
+    char* s = new char[sz + 1];
     infp.read(s, sz);
     infp.close();
     //append an endline to end of file in case one doesn't exist
@@ -268,6 +240,8 @@ part_vt load_part(ordinal_t n, const char *fname){
     return part_d;
 }
 
+//loads a sequence of coarse graphs and mappings between each graph from binary file
+//used to control for coarsening when experimenting with refinement
 std::list<typename contracter<matrix_t>::coarse_level_triple> load_coarse(){
     using coarse_level_triple = typename contracter<matrix_t>::coarse_level_triple;
     FILE* cgfp = fopen("coarse_graphs.out", "r");
@@ -320,6 +294,8 @@ std::list<typename contracter<matrix_t>::coarse_level_triple> load_coarse(){
     return levels;
 }
 
+//writes a sequence of coarse graphs and mappings between each graph to binary file
+//used to control for coarsening when experimenting with refinement
 void dump_coarse(std::list<typename contracter<matrix_t>::coarse_level_triple> levels){
     FILE* cgfp = fopen("coarse_graphs.out", "w");
     int size = levels.size();
@@ -349,6 +325,7 @@ void dump_coarse(std::list<typename contracter<matrix_t>::coarse_level_triple> l
     fclose(cgfp);
 }
 
+//writes part to binary file
 void dump_coarse_part(part_vt part){
     FILE* cgfp = fopen("coarse_part.out", "wb");
     ordinal_t n = part.extent(0);
@@ -357,6 +334,7 @@ void dump_coarse_part(part_vt part){
     fclose(cgfp);
 }
 
+//reads part from binary file
 part_vt load_coarse_part(ordinal_t n){
     FILE* cgfp = fopen("coarse_part.out", "r");
     part_vt part("part", n);
