@@ -374,6 +374,8 @@ vtx_view_t rebalance_strong(const problem& prob, const part_vt& part, const conn
     //atomically count vertices in each gain bucket
     gain_t size_max = prob.size_max;
     gain_t max_dest = opt_size + 1;
+    gain_vt save_atomic = scratch.gain1;
+    gain_vt bid = scratch.gain2;
     Kokkos::parallel_for("assign move scores part1", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
         part_t p = part(i);
         if(part_sizes(p) > size_max){
@@ -401,7 +403,10 @@ vtx_view_t rebalance_strong(const problem& prob, const part_vt& part, const conn
             //add to count of appropriate bucket
             if(gain_type < max_buckets && vtx_w(i) < 2*(part_sizes(p) - opt_size)){
                 ordinal_t g_id = (max_buckets*p + gain_type) * sections + (i % sections) + 1;
-                Kokkos::atomic_increment(&bucket_sizes(g_id));
+                bid(i) = g_id;
+                save_atomic(i) = Kokkos::atomic_fetch_add(&bucket_sizes(g_id), 1);
+            } else {
+                save_atomic(i) = -1;
             }
         }
     });
@@ -428,34 +433,12 @@ vtx_view_t rebalance_strong(const problem& prob, const part_vt& part, const conn
         });
     }
     vtx_view_t least_bad_moves = scratch.vtx1;
-    Kokkos::parallel_for("assign move scores part2", Kokkos::Experimental::require(policy_t(0, n), Kokkos::Experimental::WorkItemProperty::HintHeavyWeight), KOKKOS_LAMBDA(const ordinal_t i){
+    Kokkos::parallel_for("assign move scores part2", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
         part_t p = part(i);
         if(part_sizes(p) > size_max){
-            uint64_t tk = 0;
-            uint64_t tg = 0;
-            edge_offset_t start = cdata.conn_offsets(i);
-            part_t size = cdata.conn_table_sizes(i);
-            edge_offset_t end = start + size;
-            gain_t p_gain = 0;
-            //calculate average loss from moving to an adjacent part
-            for(edge_offset_t j = start; j < end; j++){
-                part_t pj = cdata.conn_entries(j);
-                if(pj == p){
-                    p_gain = cdata.conn_vals(j);
-                } else if(pj > NULL_PART) {
-                    if(part_sizes(pj) < max_dest){
-                        tg += cdata.conn_vals(j);
-                        tk += 1;
-                    }
-                }
-            }
-            if(tk == 0) tk = 1;
-            gain_t gain = (tg / tk) - p_gain;
-            ordinal_t gain_type = gain_bucket(gain, vtx_w(i));
-            //atomically count vertices again, write vertices to appropriate location
-            if(gain_type < max_buckets && vtx_w(i) < 2*(part_sizes(p) - opt_size)){
-                ordinal_t g_id = (max_buckets*p + gain_type) * sections + (i % sections) + 1;
-                ordinal_t insert = Kokkos::atomic_fetch_add(&bucket_offsets(g_id), 1);
+            ordinal_t insert = save_atomic(i);
+            if(insert > -1){
+                insert += bucket_offsets(bid(i));
                 least_bad_moves(insert) = i;
             }
         }
