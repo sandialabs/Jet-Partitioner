@@ -834,7 +834,7 @@ vtx_view_t rebalance_weak(const problem& prob, const part_vt& part, const conn_d
 }
 
 KOKKOS_INLINE_FUNCTION
-void build_row_cdata_large(const conn_data& cdata, const matrix_t& g, const part_vt part, const part_t k, const member& t){
+static void build_row_cdata_large(const conn_data& cdata, const matrix_t& g, const part_vt part, const part_t k, const member& t){
     ordinal_t i = t.league_rank();
     edge_offset_t g_start = cdata.conn_offsets(i);
     edge_offset_t g_end = cdata.conn_offsets(i + 1);
