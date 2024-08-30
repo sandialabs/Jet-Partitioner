@@ -867,11 +867,16 @@ void build_row_cdata_large(const conn_data& cdata, const matrix_t& g, const part
                     p_o = (p_o + 1) % size;
                     px = s_conn_entries[p_o];
                 }
-                if(s_conn_entries[p_o] == p){
+                if(px == p){
                     success = true;
                 } else {
-                    if(Kokkos::atomic_compare_exchange_strong(s_conn_entries + p_o, NULL_PART, p)) Kokkos::atomic_add(used_cap, 1);
-                    if(s_conn_entries[p_o] == p){
+                    //don't care if this thread succeeds if another thread succeeds with writing the same value
+                    px = Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
+                    if(px == NULL_PART){
+                        px = p;
+                        Kokkos::atomic_add(used_cap, 1);
+                    }
+                    if(px == p){
                         success = true;
                     } else {
                         p_o = (p_o + 1) % size;
@@ -900,8 +905,7 @@ void build_row_cdata_large(const conn_data& cdata, const matrix_t& g, const part
                     while(cdata.conn_entries(g_start + p_o) != NULL_PART){
                         p_o = (p_o + 1) % size;
                     }
-                    Kokkos::atomic_compare_exchange(&cdata.conn_entries(g_start + p_o), NULL_PART, p);
-                    if(cdata.conn_entries(g_start + p_o) == p){
+                    if(Kokkos::atomic_compare_exchange_strong(&cdata.conn_entries(g_start + p_o), NULL_PART, p)){
                         success = true;
                     } else {
                         p_o = (p_o + 1) % size;
@@ -1029,9 +1033,9 @@ void update_small(const problem& prob, const part_vt part, const vtx_view_t swap
                 if(px == best){
                     success = true;
                 } else if(px <= NULL_PART){
-                    //don't care if this thread succeeds if another thread succeeds with the same value
-                    Kokkos::atomic_compare_exchange(&cdata.conn_entries(v_start + p_o), px, best);
-                    if(cdata.conn_entries(v_start + p_o) == best){
+                    //don't care if this thread succeeds if another thread succeeds with writing the same value
+                    px = Kokkos::atomic_compare_exchange(&cdata.conn_entries(v_start + p_o), px, best);
+                    if(px == best || px <= NULL_PART){
                         success = true;
                     } else {
                         p_o = (p_o + 1) % v_size;
@@ -1053,11 +1057,13 @@ void update_small(const problem& prob, const part_vt part, const vtx_view_t swap
                     if(px == best){
                         success = true;
                     } else {
-                        if(Kokkos::atomic_compare_exchange_strong(&cdata.conn_entries(v_start + p_o), px, best)){
+                        //don't care if this thread succeeded if another thread succeeded with writing the same value
+                        part_t py = Kokkos::atomic_compare_exchange(&cdata.conn_entries(v_start + p_o), px, best);
+                        if(py == px){
+                            py = best;
                             Kokkos::atomic_add(&cdata.conn_table_sizes(v), 1);
                         }
-                        //don't care if this thread succeeded if another thread succeeded with the same value
-                        if(cdata.conn_entries(v_start + p_o) == best){
+                        if(py == best){
                             success = true;
                         } else {
                             p_o++;
