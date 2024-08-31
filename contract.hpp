@@ -194,15 +194,15 @@ struct combineAndDedupe {
         edge_offset_t insert(const edge_offset_t& hash_start, const edge_offset_t& size, const ordinal_t& u) const {
             edge_offset_t offset = abs(xorshiftHash<ordinal_t>(u)) % size;
             while(true){
-                if(htable(hash_start + offset) == -1){
-                    Kokkos::atomic_compare_exchange(&htable(hash_start + offset), -1, u);
+                ordinal_t v = htable(hash_start + offset);
+                if(v == -1){
+                    v = Kokkos::atomic_compare_exchange(&htable(hash_start + offset), -1, u);
                 }
-                if(htable(hash_start + offset) == u){
+                if(v == u || v == -1){
                     return offset;
-                } else {
-                    offset++;
-                    if(offset >= size) offset -= size;
                 }
+                offset++;
+                if(offset >= size) offset -= size;
             }
         }
 
