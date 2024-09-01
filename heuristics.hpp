@@ -604,7 +604,7 @@ public:
                 ordinal_t adj_size = g.graph.row_map(i + 1) - g.graph.row_map(i);
                 if(adj_size == 0) return;
                 gen_t generator = rand_pool.get_state();
-                edge_offset_t offset = g.graph.row_map(i) + (generator.urand64() % ((uint64_t)adj_size));
+                edge_offset_t offset = generator.urand(g.graph.row_map(i), g.graph.row_map(i+1));
                 hn(i) = g.graph.entries(offset);
                 rand_pool.free_state(generator);
             });
@@ -623,11 +623,11 @@ public:
                         }
                     }, Kokkos::Max<scalar_t, Device>(max_ewt));
                     thread.team_barrier();
-                    typename Kokkos::MaxLoc<uint64_t, edge_offset_t, Device>::value_type argmax{0, end};
-                    Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, Kokkos::ValLocScalar<uint64_t,edge_offset_t>& local) {
+                    typename Kokkos::MaxLoc<uint32_t, edge_offset_t, Device>::value_type argmax{0, end};
+                    Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, Kokkos::ValLocScalar<uint32_t,edge_offset_t>& local) {
                         if(g.values(j) == max_ewt){
                             gen_t generator = rand_pool.get_state();
-                            uint64_t tiebreaker = generator.urand64();
+                            uint32_t tiebreaker = generator.urand();
                             rand_pool.free_state(generator);
                             if(tiebreaker >= local.val){
                                 local.val = tiebreaker;
@@ -635,7 +635,7 @@ public:
                             }
                         }
                     
-                    }, Kokkos::MaxLoc<uint64_t, edge_offset_t,Device>(argmax));
+                    }, Kokkos::MaxLoc<uint32_t, edge_offset_t,Device>(argmax));
                     thread.team_barrier();
                     ordinal_t hn_i = g.graph.entries(argmax.loc);
                     hn(i) = hn_i;
@@ -648,14 +648,14 @@ public:
                     ordinal_t hn_i = g.graph.entries(g.graph.row_map(i));
                     scalar_t max_ewt = g.values(g.graph.row_map(i));
                     gen_t generator = rand_pool.get_state();
-                    uint64_t tiebreaker = generator.urand64();
+                    uint32_t tiebreaker = generator.urand64();
                     for (edge_offset_t j = start + 1; j < end; j++) {
                         if (max_ewt < g.values(j)) {
                             max_ewt = g.values(j);
                             hn_i = g.graph.entries(j);
                             tiebreaker = generator.urand64();
                         } else if(max_ewt == g.values(j)){
-                            uint64_t sim_wgt = generator.urand64();
+                            uint32_t sim_wgt = generator.urand();
                             if(tiebreaker < sim_wgt){
                                 hn_i = g.graph.entries(j);
                                 tiebreaker = sim_wgt;
@@ -744,18 +744,18 @@ public:
                             }
                         }, Kokkos::Max<scalar_t, Device>(max_ewt));
                         thread.team_barrier();
-                        typename Kokkos::MaxLoc<uint64_t, edge_offset_t, Device>::value_type argmax{0, end};
-                        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, Kokkos::ValLocScalar<uint64_t,edge_offset_t>& local) {
+                        typename Kokkos::MaxLoc<uint32_t, edge_offset_t, Device>::value_type argmax{0, end};
+                        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, Kokkos::ValLocScalar<uint32_t,edge_offset_t>& local) {
                             if(vcmap(g.graph.entries(j)) == ORD_MAX && g.values(j) == max_ewt){
                                 gen_t generator = rand_pool.get_state();
-                                uint64_t tiebreaker = generator.urand64();
+                                uint32_t tiebreaker = generator.urand();
                                 rand_pool.free_state(generator);
                                 if(tiebreaker >= local.val){
                                     local.val = tiebreaker;
                                     local.loc = j;
                                 }
                             }
-                        }, Kokkos::MaxLoc<uint64_t, edge_offset_t,Device>(argmax));
+                        }, Kokkos::MaxLoc<uint32_t, edge_offset_t,Device>(argmax));
                         thread.team_barrier();
                         if(argmax.loc >= start && argmax.loc < end){
                             ordinal_t hn_u = g.graph.entries(argmax.loc);
@@ -771,7 +771,7 @@ public:
                         ordinal_t h = ORD_MAX;
                         gen_t generator = rand_pool.get_state();
                         scalar_t max_ewt = 0;
-                        ordinal_t tiebreaker = 0;
+                        uint32_t tiebreaker = 0;
                         for (edge_offset_t j = g.graph.row_map(u); j < g.graph.row_map(u + 1); j++) {
                             ordinal_t v = g.graph.entries(j);
                             //v must be unmatched to be considered
@@ -779,9 +779,9 @@ public:
                                 if (max_ewt < g.values(j)) {
                                     max_ewt = g.values(j);
                                     h = v;
-                                    tiebreaker = generator.urand64();
+                                    tiebreaker = generator.urand();
                                 } else if(max_ewt == g.values(j)){
-                                    ordinal_t sim_wgt = generator.urand64();
+                                    uint32_t sim_wgt = generator.urand();
                                     //using <= so that zero may still be chosen
                                     if(tiebreaker < sim_wgt){
                                         h = v;
