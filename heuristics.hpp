@@ -712,13 +712,13 @@ public:
                     if (vcmap(u) != ORD_MAX || hn(u) == ORD_MAX || vcmap(hn(u)) == ORD_MAX) return;
                     ordinal_t h = ORD_MAX;
                     gen_t generator = rand_pool.get_state();
-                    uint64_t max_ewt = 0;
+                    uint32_t max_ewt = 0;
                     //we have to iterate over the edges anyways because we need to check if any are unmatched!
                     for (edge_offset_t j = g.graph.row_map(u); j < g.graph.row_map(u + 1); j++) {
                         ordinal_t v = g.graph.entries(j);
                         //v must be unmatched to be considered
                         if (vcmap(v) == ORD_MAX) {
-                            uint64_t sim_wgt = generator.urand64();
+                            uint32_t sim_wgt = generator.urand();
                             //using <= so that the minimum value for ordinal_t can also be chosen
                             if (max_ewt <= sim_wgt) {
                                 max_ewt = sim_wgt;
