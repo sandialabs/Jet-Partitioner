@@ -798,7 +798,7 @@ public:
             vtx_view_t perm = perm_scratch;
             if(perm_length != n){
                 perm = Kokkos::subview(perm_scratch, std::make_pair((ordinal_t)0, perm_length));
-                Kokkos::deep_copy(perm, vperm);
+                Kokkos::deep_copy(exec_space(), perm, vperm);
             }
             Kokkos::parallel_scan("scan remaining", policy_t(0, perm_length), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
                 ordinal_t u = perm_length == n ? i : perm(i);
