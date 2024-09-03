@@ -648,12 +648,12 @@ public:
                     ordinal_t hn_i = g.graph.entries(g.graph.row_map(i));
                     scalar_t max_ewt = g.values(g.graph.row_map(i));
                     gen_t generator = rand_pool.get_state();
-                    uint32_t tiebreaker = generator.urand64();
+                    uint32_t tiebreaker = generator.urand();
                     for (edge_offset_t j = start + 1; j < end; j++) {
                         if (max_ewt < g.values(j)) {
                             max_ewt = g.values(j);
                             hn_i = g.graph.entries(j);
-                            tiebreaker = generator.urand64();
+                            tiebreaker = generator.urand();
                         } else if(max_ewt == g.values(j)){
                             uint32_t sim_wgt = generator.urand();
                             if(tiebreaker < sim_wgt){
