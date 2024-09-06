@@ -70,8 +70,11 @@ public:
     using pool_t = Kokkos::Random_XorShift64_Pool<Device>;
     using gen_t = typename pool_t::generator_type;
     using hasher_t = Kokkos::pod_hash<ordinal_t>;
+    using argmax_reducer_t = Kokkos::MaxLoc<uint32_t, edge_offset_t, Device>;
+    using argmax_t = typename argmax_reducer_t::value_type;
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
     static constexpr ordinal_t ORD_MIN = std::numeric_limits<ordinal_t>::min();
+    static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
 
     struct coarse_map {
         ordinal_t coarse_vtx;
@@ -581,6 +584,99 @@ public:
         });
     }
 
+    template<bool is_initial>
+    struct pickMatch {
+        matrix_t g;
+        vtx_view_t vcmap;
+        vtx_view_t hn;
+        pool_t rand_pool;
+        vtx_view_t vperm;
+        ordinal_t n;
+        ordinal_t perm_length;
+
+        pickMatch(matrix_t _g,
+            vtx_view_t _vcmap,
+            vtx_view_t _hn,
+            pool_t _rand_pool,
+            vtx_view_t _vperm,
+            ordinal_t _n,
+            ordinal_t _perm_length) :
+                g(_g),
+                vcmap(_vcmap),
+                hn(_hn),
+                rand_pool(_rand_pool),
+                vperm(_vperm),
+                n(_n),
+                perm_length(_perm_length) {}
+
+        KOKKOS_INLINE_FUNCTION
+        void operator()(const member& thread) const {
+            const ordinal_t i = thread.league_rank();
+            ordinal_t u = perm_length == n ? i : vperm(i);
+            if(!is_initial && (vcmap(u) != ORD_MAX || hn(u) == ORD_MAX || vcmap(hn(u)) == ORD_MAX)) return;
+            scalar_t max_ewt = 0;
+            edge_offset_t start = g.graph.row_map(u);
+            edge_offset_t end = g.graph.row_map(u+1);
+            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, scalar_t& update){
+                if(!is_initial && vcmap(g.graph.entries(j)) != ORD_MAX) return;
+                if(g.values(j) > update){
+                    update = g.values(j);
+                }
+            }, Kokkos::Max<scalar_t, Device>(max_ewt));
+            thread.team_barrier();
+            argmax_t argmax{0, end};
+            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, argmax_t& local) {
+                //v must be unmatched to be considered
+                if(!is_initial && vcmap(g.graph.entries(j)) != ORD_MAX) return;
+                if(g.values(j) == max_ewt){
+                    gen_t generator = rand_pool.get_state();
+                    uint32_t tiebreaker = generator.urand();
+                    rand_pool.free_state(generator);
+                    if(tiebreaker >= local.val){
+                        local.val = tiebreaker;
+                        local.loc = j;
+                    }
+                }
+            }, argmax_reducer_t(argmax));
+            thread.team_barrier();
+            if(argmax.loc >= start && argmax.loc < end){
+                ordinal_t hn_u = g.graph.entries(argmax.loc);
+                hn(u) = hn_u;
+            } else {
+                hn(u) = ORD_MAX;
+            }
+        }
+
+        KOKKOS_INLINE_FUNCTION
+        void operator()(const ordinal_t& i) const {
+            ordinal_t u = perm_length == n ? i : vperm(i);
+            if(!is_initial && (vcmap(u) != ORD_MAX || hn(u) == ORD_MAX || vcmap(hn(u)) == ORD_MAX)) return;
+            ordinal_t h = ORD_MAX;
+            gen_t generator = rand_pool.get_state();
+            scalar_t max_ewt = 0;
+            uint32_t tiebreaker = 0;
+            for (edge_offset_t j = g.graph.row_map(u); j < g.graph.row_map(u + 1); j++) {
+                ordinal_t v = g.graph.entries(j);
+                //v must be unmatched to be considered
+                if (is_initial || vcmap(v) == ORD_MAX) {
+                    if (max_ewt < g.values(j)) {
+                        max_ewt = g.values(j);
+                        h = v;
+                        tiebreaker = generator.urand();
+                    } else if(max_ewt == g.values(j)){
+                        uint32_t sim_wgt = generator.urand();
+                        if(tiebreaker < sim_wgt){
+                            h = v;
+                            tiebreaker = sim_wgt;
+                        }
+                    }
+                }
+            }
+            rand_pool.free_state(generator);
+            hn(u) = h;
+        }
+    };
+
     coarse_map coarsen_match(const matrix_t& g,
         bool uniform_weights, pool_t& rand_pool,
         ExperimentLoggerUtil<scalar_t>& experiment,
@@ -610,61 +706,11 @@ public:
             });
         }
         else {
-            if(g.nnz() / g.numRows() > 32){
-                Kokkos::parallel_for("Potential matches (heavy)", team_policy_t(n, Kokkos::AUTO), KOKKOS_LAMBDA(const member& thread) {
-                    const ordinal_t i = thread.league_rank();
-                    edge_offset_t start = g.graph.row_map(i);
-                    edge_offset_t end = g.graph.row_map(i+1);
-                    if(end - start == 0) return;
-                    scalar_t max_ewt = 0;
-                    Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, scalar_t& update){
-                        if(g.values(j) > update){
-                            update = g.values(j);
-                        }
-                    }, Kokkos::Max<scalar_t, Device>(max_ewt));
-                    thread.team_barrier();
-                    typename Kokkos::MaxLoc<uint32_t, edge_offset_t, Device>::value_type argmax{0, end};
-                    Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, Kokkos::ValLocScalar<uint32_t,edge_offset_t>& local) {
-                        if(g.values(j) == max_ewt){
-                            gen_t generator = rand_pool.get_state();
-                            uint32_t tiebreaker = generator.urand();
-                            rand_pool.free_state(generator);
-                            if(tiebreaker >= local.val){
-                                local.val = tiebreaker;
-                                local.loc = j;
-                            }
-                        }
-                    
-                    }, Kokkos::MaxLoc<uint32_t, edge_offset_t,Device>(argmax));
-                    thread.team_barrier();
-                    ordinal_t hn_i = g.graph.entries(argmax.loc);
-                    hn(i) = hn_i;
-                });
+            pickMatch<true> matcher(g, vcmap, hn, rand_pool, vperm, n, n);
+            if(!is_host_space && g.nnz() / g.numRows() > 32){
+                Kokkos::parallel_for("Potential matches (heavy)", team_policy_t(n, Kokkos::AUTO), matcher);
             } else {
-                Kokkos::parallel_for("Potential matches (heavy)", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
-                    edge_offset_t start = g.graph.row_map(i);
-                    edge_offset_t end = g.graph.row_map(i+1);
-                    if(end - start == 0) return;
-                    ordinal_t hn_i = g.graph.entries(g.graph.row_map(i));
-                    scalar_t max_ewt = g.values(g.graph.row_map(i));
-                    gen_t generator = rand_pool.get_state();
-                    uint32_t tiebreaker = generator.urand();
-                    for (edge_offset_t j = start + 1; j < end; j++) {
-                        if (max_ewt < g.values(j)) {
-                            max_ewt = g.values(j);
-                            hn_i = g.graph.entries(j);
-                            tiebreaker = generator.urand();
-                        } else if(max_ewt == g.values(j)){
-                            uint32_t sim_wgt = generator.urand();
-                            if(tiebreaker < sim_wgt){
-                                hn_i = g.graph.entries(j);
-                                tiebreaker = sim_wgt;
-                            }
-                        }
-                    }
-                    rand_pool.free_state(generator);
-                    hn(i) = hn_i;
-                });
+                Kokkos::parallel_for("Potential matches (heavy)", policy_t(0, n), matcher);
             }
         }
         experiment.addMeasurement(Measurement::Heavy, timer.seconds());
@@ -730,69 +776,11 @@ public:
                     hn(u) = h;
                 });
             } else {
-                if(g.nnz() / g.numRows() > 32){
-                    Kokkos::parallel_for("Potential matches (heavy)", team_policy_t(perm_length, Kokkos::AUTO), KOKKOS_LAMBDA(const member& thread) {
-                        const ordinal_t i = thread.league_rank();
-                        ordinal_t u = perm_length == n ? i : vperm(i);
-                        if(vcmap(u) != ORD_MAX || hn(u) == ORD_MAX || vcmap(hn(u)) == ORD_MAX) return;
-                        scalar_t max_ewt = 0;
-                        edge_offset_t start = g.graph.row_map(u);
-                        edge_offset_t end = g.graph.row_map(u+1);
-                        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, scalar_t& update){
-                            if(vcmap(g.graph.entries(j)) == ORD_MAX && g.values(j) > update){
-                                update = g.values(j);
-                            }
-                        }, Kokkos::Max<scalar_t, Device>(max_ewt));
-                        thread.team_barrier();
-                        typename Kokkos::MaxLoc<uint32_t, edge_offset_t, Device>::value_type argmax{0, end};
-                        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, Kokkos::ValLocScalar<uint32_t,edge_offset_t>& local) {
-                            if(vcmap(g.graph.entries(j)) == ORD_MAX && g.values(j) == max_ewt){
-                                gen_t generator = rand_pool.get_state();
-                                uint32_t tiebreaker = generator.urand();
-                                rand_pool.free_state(generator);
-                                if(tiebreaker >= local.val){
-                                    local.val = tiebreaker;
-                                    local.loc = j;
-                                }
-                            }
-                        }, Kokkos::MaxLoc<uint32_t, edge_offset_t,Device>(argmax));
-                        thread.team_barrier();
-                        if(argmax.loc >= start && argmax.loc < end){
-                            ordinal_t hn_u = g.graph.entries(argmax.loc);
-                            hn(u) = hn_u;
-                        } else {
-                            hn(u) = ORD_MAX;
-                        }
-                    });
+                pickMatch<false> matcher(g, vcmap, hn, rand_pool, vperm, n, perm_length);
+                if(!is_host_space && g.nnz() / g.numRows() > 32){
+                    Kokkos::parallel_for("Potential matches (heavy)", team_policy_t(perm_length, Kokkos::AUTO), matcher);
                 } else {
-                    Kokkos::parallel_for("Potential matches (heavy)", policy_t(0, perm_length), KOKKOS_LAMBDA(ordinal_t i){
-                        ordinal_t u = perm_length == n ? i : vperm(i);
-                        if (vcmap(u) != ORD_MAX || hn(u) == ORD_MAX || vcmap(hn(u)) == ORD_MAX) return;
-                        ordinal_t h = ORD_MAX;
-                        gen_t generator = rand_pool.get_state();
-                        scalar_t max_ewt = 0;
-                        uint32_t tiebreaker = 0;
-                        for (edge_offset_t j = g.graph.row_map(u); j < g.graph.row_map(u + 1); j++) {
-                            ordinal_t v = g.graph.entries(j);
-                            //v must be unmatched to be considered
-                            if (vcmap(v) == ORD_MAX) {
-                                if (max_ewt < g.values(j)) {
-                                    max_ewt = g.values(j);
-                                    h = v;
-                                    tiebreaker = generator.urand();
-                                } else if(max_ewt == g.values(j)){
-                                    uint32_t sim_wgt = generator.urand();
-                                    //using <= so that zero may still be chosen
-                                    if(tiebreaker < sim_wgt){
-                                        h = v;
-                                        tiebreaker = sim_wgt;
-                                    }
-                                }
-                            }
-                        }
-                        rand_pool.free_state(generator);
-                        hn(u) = h;
-                    });
+                    Kokkos::parallel_for("Potential matches (heavy)", policy_t(0, perm_length), matcher);
                 }
             }
             vtx_view_t perm = perm_scratch;
