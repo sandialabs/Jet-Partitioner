@@ -46,6 +46,15 @@
 
 namespace jet_partitioner {
 
+template<typename ordinal_t>
+KOKKOS_INLINE_FUNCTION ordinal_t xorshiftHash(ordinal_t key) {
+  ordinal_t x = key;
+  x ^= x << 13;
+  x ^= x >> 17;
+  x ^= x << 5;
+  return x;
+}
+
 template<class crsMat>
 class coarsen_heuristics {
 public:
@@ -617,6 +626,12 @@ public:
             scalar_t max_ewt = 0;
             edge_offset_t start = g.graph.row_map(u);
             edge_offset_t end = g.graph.row_map(u+1);
+            uint32_t r = 0;
+            Kokkos::single(Kokkos::PerTeam(thread), [=](uint32_t& update){
+                gen_t generator = rand_pool.get_state();
+                update = generator.urand();
+                rand_pool.free_state(generator);
+            }, r);
             Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, scalar_t& update){
                 if(!is_initial && vcmap(g.graph.entries(j)) != ORD_MAX) return;
                 if(g.values(j) > update){
@@ -629,9 +644,8 @@ public:
                 //v must be unmatched to be considered
                 if(!is_initial && vcmap(g.graph.entries(j)) != ORD_MAX) return;
                 if(g.values(j) == max_ewt){
-                    gen_t generator = rand_pool.get_state();
-                    uint32_t tiebreaker = generator.urand();
-                    rand_pool.free_state(generator);
+                    uint32_t v = g.graph.entries(j);
+                    uint32_t tiebreaker = xorshiftHash<uint32_t>(v + r);
                     if(tiebreaker >= local.val){
                         local.val = tiebreaker;
                         local.loc = j;

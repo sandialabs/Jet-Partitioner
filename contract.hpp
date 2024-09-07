@@ -48,15 +48,6 @@
 
 namespace jet_partitioner {
 
-template<typename ordinal_t>
-KOKKOS_INLINE_FUNCTION ordinal_t xorshiftHash(ordinal_t key) {
-  ordinal_t x = key;
-  x ^= x << 13;
-  x ^= x >> 17;
-  x ^= x << 5;
-  return x;
-}
-
 template<class crsMat> //typename ordinal_t, typename edge_offset_t, typename scalar_t, class Device>
 class contracter {
 public:
