@@ -593,7 +593,7 @@ public:
         });
     }
 
-    template<bool is_initial>
+    template<bool is_initial, bool is_uniform>
     struct pickMatch {
         matrix_t g;
         vtx_view_t vcmap;
@@ -632,18 +632,20 @@ public:
                 update = generator.urand();
                 rand_pool.free_state(generator);
             }, r);
-            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, scalar_t& update){
-                if(!is_initial && vcmap(g.graph.entries(j)) != ORD_MAX) return;
-                if(g.values(j) > update){
-                    update = g.values(j);
-                }
-            }, Kokkos::Max<scalar_t, Device>(max_ewt));
+            if(!is_uniform){
+                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, scalar_t& update){
+                    if(!is_initial && vcmap(g.graph.entries(j)) != ORD_MAX) return;
+                    if(g.values(j) > update){
+                        update = g.values(j);
+                    }
+                }, Kokkos::Max<scalar_t, Device>(max_ewt));
+            }
             thread.team_barrier();
             argmax_t argmax{0, end};
             Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, argmax_t& local) {
                 //v must be unmatched to be considered
                 if(!is_initial && vcmap(g.graph.entries(j)) != ORD_MAX) return;
-                if(g.values(j) == max_ewt){
+                if(is_uniform || g.values(j) == max_ewt){
                     uint32_t v = g.graph.entries(j);
                     uint32_t tiebreaker = xorshiftHash<uint32_t>(v + r);
                     if(tiebreaker >= local.val){
@@ -667,18 +669,20 @@ public:
             if(!is_initial && (vcmap(u) != ORD_MAX || hn(u) == ORD_MAX || vcmap(hn(u)) == ORD_MAX)) return;
             ordinal_t h = ORD_MAX;
             gen_t generator = rand_pool.get_state();
+            uint32_t r = generator.urand();
+            rand_pool.free_state(generator);
             scalar_t max_ewt = 0;
             uint32_t tiebreaker = 0;
             for (edge_offset_t j = g.graph.row_map(u); j < g.graph.row_map(u + 1); j++) {
                 ordinal_t v = g.graph.entries(j);
                 //v must be unmatched to be considered
                 if (is_initial || vcmap(v) == ORD_MAX) {
-                    if (max_ewt < g.values(j)) {
+                    if (!is_uniform && max_ewt < g.values(j)) {
                         max_ewt = g.values(j);
                         h = v;
-                        tiebreaker = generator.urand();
-                    } else if(max_ewt == g.values(j)){
-                        uint32_t sim_wgt = generator.urand();
+                        tiebreaker = xorshiftHash<uint32_t>(v + r);
+                    } else if(is_uniform || max_ewt == g.values(j)){
+                        uint32_t sim_wgt = xorshiftHash<uint32_t>(v + r);
                         if(tiebreaker < sim_wgt){
                             h = v;
                             tiebreaker = sim_wgt;
@@ -686,7 +690,6 @@ public:
                     }
                 }
             }
-            rand_pool.free_state(generator);
             hn(u) = h;
         }
     };
@@ -720,7 +723,7 @@ public:
             });
         }
         else {
-            pickMatch<true> matcher(g, vcmap, hn, rand_pool, vperm, n, n);
+            pickMatch<true, false> matcher(g, vcmap, hn, rand_pool, vperm, n, n);
             if(!is_host_space && g.nnz() / g.numRows() > 32){
                 Kokkos::parallel_for("Potential matches (heavy)", team_policy_t(n, Kokkos::AUTO), matcher);
             } else {
@@ -765,32 +768,16 @@ public:
                 }
             });
 
-            //find vertices that can still be matched
+            // find new matches for unmatched vertices
             if(uniform_weights){
-                Kokkos::parallel_for("Potential matches (random)", policy_t(0, perm_length), KOKKOS_LAMBDA(ordinal_t i){
-                    ordinal_t u = perm_length == n ? i : vperm(i);
-                    if (vcmap(u) != ORD_MAX || hn(u) == ORD_MAX || vcmap(hn(u)) == ORD_MAX) return;
-                    ordinal_t h = ORD_MAX;
-                    gen_t generator = rand_pool.get_state();
-                    uint32_t max_ewt = 0;
-                    //we have to iterate over the edges anyways because we need to check if any are unmatched!
-                    for (edge_offset_t j = g.graph.row_map(u); j < g.graph.row_map(u + 1); j++) {
-                        ordinal_t v = g.graph.entries(j);
-                        //v must be unmatched to be considered
-                        if (vcmap(v) == ORD_MAX) {
-                            uint32_t sim_wgt = generator.urand();
-                            //using <= so that the minimum value for ordinal_t can also be chosen
-                            if (max_ewt <= sim_wgt) {
-                                max_ewt = sim_wgt;
-                                h = v;
-                            }
-                        }
-                    }
-                    rand_pool.free_state(generator);
-                    hn(u) = h;
-                });
+                pickMatch<false, true> matcher(g, vcmap, hn, rand_pool, vperm, n, perm_length);
+                if(!is_host_space && g.nnz() / g.numRows() > 32){
+                    Kokkos::parallel_for("Potential matches (random)", team_policy_t(perm_length, Kokkos::AUTO), matcher);
+                } else {
+                    Kokkos::parallel_for("Potential matches (random)", policy_t(0, perm_length), matcher);
+                }
             } else {
-                pickMatch<false> matcher(g, vcmap, hn, rand_pool, vperm, n, perm_length);
+                pickMatch<false, false> matcher(g, vcmap, hn, rand_pool, vperm, n, perm_length);
                 if(!is_host_space && g.nnz() / g.numRows() > 32){
                     Kokkos::parallel_for("Potential matches (heavy)", team_policy_t(perm_length, Kokkos::AUTO), matcher);
                 } else {
