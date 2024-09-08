@@ -465,7 +465,7 @@ coarse_map generate_coarse_mapping(const matrix_t g,
             break;
         case Match:
         case MtMetis:
-            interpolation_graph = mapper.coarsen_match(g, uniform_weights, rand_pool, experiment, choice);
+            interpolation_graph = mapper.coarsen_match(g, uniform_weights, rand_pool, choice);
             break;
     }
     Kokkos::fence();

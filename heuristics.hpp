@@ -90,143 +90,6 @@ public:
         vtx_view_t map;
     };
 
-    template <class in, class out>
-    Kokkos::View<out*, Device> sort_order(Kokkos::View<in*, Device> array, in max, in min) {
-        typedef Kokkos::BinOp1D< Kokkos::View<in*, Device> > BinOp;
-        BinOp bin_op(array.extent(0), min, max);
-        //VERY important that final parameter is true
-        Kokkos::BinSort< Kokkos::View<in*, Device>, BinOp, exec_space, out >
-            sorter(array, bin_op, true);
-        sorter.create_permute_vector();
-        return sorter.get_permute_vector();
-    }
-
-    vtx_view_t generate_permutation(ordinal_t n, pool_t rand_pool) {
-        rand_view_t randoms("randoms", n);
-
-        Kokkos::Timer t;
-        Kokkos::parallel_for("create random entries", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i){
-            gen_t generator = rand_pool.get_state();
-            randoms(i) = generator.urand64();
-            rand_pool.free_state(generator);
-        });
-        //printf("random time: %.4f\n", t.seconds());
-        t.reset();
-
-        int t_buckets = 2*n;
-        vtx_view_t buckets("buckets", t_buckets);
-        Kokkos::parallel_for("init buckets", policy_t(0, t_buckets), KOKKOS_LAMBDA(ordinal_t i){
-            buckets(i) = ORD_MAX;
-        });
-
-        uint64_t max = std::numeric_limits<uint64_t>::max();
-        uint64_t bucket_size = max / t_buckets;
-        Kokkos::parallel_for("insert buckets", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i){
-            ordinal_t bucket = randoms(i) / bucket_size;
-            //jesus take the wheel
-            for(;; bucket++){
-                if(bucket >= t_buckets) bucket -= t_buckets;
-                if(buckets(bucket) == ORD_MAX){
-                    //attempt to insert into bucket
-                    if(Kokkos::atomic_compare_exchange_strong(&buckets(bucket), ORD_MAX, i)){
-                        break;
-                    }
-                }
-            }
-        });
-        
-        vtx_view_t permute("permutation", n);
-        Kokkos::parallel_scan("extract permutation", policy_t(0, t_buckets), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-            if(buckets(i) != ORD_MAX){
-                if(final){
-                    permute(update) = buckets(i);
-                }
-                update++;
-            }
-        });
-
-        /*
-        uint64_t max = std::numeric_limits<uint64_t>::max();
-        typedef Kokkos::BinOp1D< rand_view_t > BinOp;
-        BinOp bin_op(n, 0, max);
-        //VERY important that final parameter is true
-        Kokkos::BinSort< rand_view_t, BinOp, exec_space, ordinal_t >
-            sorter(randoms, bin_op, true);
-        sorter.create_permute_vector();
-        */
-        //printf("sort time: %.4f\n", t.seconds());
-        t.reset();
-        return permute;//sorter.get_permute_vector();
-    }
-
-    //create a mapping when some vertices are already mapped
-    //hn is a list of vertices such that vertex i wants to aggregate with vertex hn(i)
-    ordinal_t parallel_map_construct_prefilled(vtx_view_t vcmap, const ordinal_t n, const vtx_view_t vperm, const vtx_view_t hn, Kokkos::View<ordinal_t, Device> nvertices_coarse) {
-
-        vtx_view_t match("match", n);
-        Kokkos::parallel_for(policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
-            if (vcmap(i) == ORD_MAX) {
-                match(i) = ORD_MAX;
-            }
-            else {
-                match(i) = n + 1;
-            }
-        });
-        ordinal_t perm_length = vperm.extent(0);
-
-        //construct mapping using heaviest edges
-        int swap = 1;
-        vtx_view_t curr_perm = vperm;
-        while (perm_length > 0) {
-            vtx_view_t next_perm("next perm", perm_length);
-            Kokkos::View<ordinal_t, Device> next_length("next_length");
-
-            Kokkos::parallel_for(policy_t(0, perm_length), KOKKOS_LAMBDA(ordinal_t i) {
-                ordinal_t u = curr_perm(i);
-                ordinal_t v = hn(u);
-                int condition = u < v;
-                //need to enforce an ordering condition to allow hard-stall conditions to be broken
-                if (condition ^ swap) {
-                    if (Kokkos::atomic_compare_exchange_strong(&match(u), ORD_MAX, v)) {
-                        if (u == v || Kokkos::atomic_compare_exchange_strong(&match(v), ORD_MAX, u)) {
-                            ordinal_t cv = Kokkos::atomic_fetch_add(&nvertices_coarse(), 1);
-                            vcmap(u) = cv;
-                            vcmap(v) = cv;
-                        }
-                        else {
-                            if (vcmap(v) < n) {
-                                vcmap(u) = vcmap(v);
-                            }
-                            else {
-                                match(u) = ORD_MAX;
-                            }
-                        }
-                    }
-                }
-            });
-            Kokkos::fence();
-            //add the ones that failed to be reprocessed next round
-            //maybe count these then create next_perm to save memory?
-            Kokkos::parallel_for(policy_t(0, perm_length), KOKKOS_LAMBDA(ordinal_t i) {
-                ordinal_t u = curr_perm(i);
-                if (vcmap(u) >= n) {
-                    ordinal_t add_next = Kokkos::atomic_fetch_add(&next_length(), 1);
-                    next_perm(add_next) = u;
-                    //been noticing some memory errors on my machine, probably from memory overclock
-                    //this fixes the problem, and is lightweight
-                    match(u) = ORD_MAX;
-                }
-            });
-            Kokkos::fence();
-            swap = swap ^ 1;
-            Kokkos::deep_copy(perm_length, next_length);
-            curr_perm = next_perm;
-        }
-        ordinal_t nc = 0;
-        Kokkos::deep_copy(nc, nvertices_coarse);
-        return nc;
-    }
-
     //hn is a list of vertices such that vertex i wants to aggregate with vertex hn(i)
     ordinal_t parallel_map_construct(vtx_view_t vcmap, const ordinal_t n, const vtx_view_t vperm, const vtx_view_t hn) {
 
@@ -307,139 +170,6 @@ public:
         });
         ordinal_t nc = 0;
         Kokkos::deep_copy(nc, nvertices_coarse);
-        return nc;
-    }
-
-    ordinal_t parallel_map_construct_v2(vtx_view_t vcmap, const ordinal_t n, const vtx_view_t vperm, const vtx_view_t hn, const vtx_view_t ordering) {
-
-        ordinal_t remaining_total = n;
-        Kokkos::View<ordinal_t, Device> nvertices_coarse("nvertices");
-
-        vtx_view_t remaining = vperm;
-
-        while (remaining_total > 0) {
-            vtx_view_t heavy_samples("heavy samples", n);
-            Kokkos::parallel_for("init heavy samples", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t u){
-                heavy_samples(u) = ORD_MAX;
-            });
-            //for every vertex v which is the heavy neighbor for at least one other vertex u
-            //we arbitrarily "match" one of the u with v
-            //each u can therefore appear once in heavy_samples
-            Kokkos::parallel_for("fill heavy samples", policy_t(0, remaining_total), KOKKOS_LAMBDA(ordinal_t i){
-                ordinal_t u = remaining(i);
-                ordinal_t v = ordering(hn(u));
-                Kokkos::atomic_compare_exchange_strong(&heavy_samples(v), ORD_MAX, u);
-            });
-            vtx_view_t psuedo_locks("psuedo locks", n);
-
-            Kokkos::parallel_for("do matching", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t v){
-                ordinal_t u = heavy_samples(v);
-                ordinal_t first = u, second = v;
-                if (v < u) {
-                    first = v;
-                    second = u;
-                }
-                if (u != ORD_MAX && Kokkos::atomic_fetch_add(&psuedo_locks(first), 1) == 0 && Kokkos::atomic_fetch_add(&psuedo_locks(second), 1) == 0)
-                {
-                    ordinal_t c_id = Kokkos::atomic_fetch_add(&nvertices_coarse(), 1);
-                    vcmap(u) = c_id;
-                    vcmap(vperm(v)) = c_id;
-                }
-            });
-
-            ordinal_t total_unmapped = 0;
-            Kokkos::parallel_reduce("handle unmatched", policy_t(0, remaining_total), KOKKOS_LAMBDA(ordinal_t i, ordinal_t & sum){
-                ordinal_t u = remaining(i);
-                if (vcmap(u) == ORD_MAX) {
-                    ordinal_t v = hn(u);
-                    if (vcmap(v) != ORD_MAX) {
-                        vcmap(u) = vcmap(v);
-                    }
-                    else {
-                        sum++;
-                    }
-                }
-            }, total_unmapped);
-
-            vtx_view_t next_perm("next perm", total_unmapped);
-            Kokkos::parallel_scan("set unmapped aside", policy_t(0, remaining_total), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t & update, const bool final){
-                ordinal_t u = remaining(i);
-                if (vcmap(u) == ORD_MAX) {
-                    if (final) {
-                        next_perm(update) = u;
-                    }
-                    update++;
-                }
-            });
-
-            remaining_total = total_unmapped;
-            remaining = next_perm;
-        }
-
-        ordinal_t nc = 0;
-        Kokkos::deep_copy(nc, nvertices_coarse);
-        return nc;
-    }
-
-    ordinal_t parallel_map_construct_v3(vtx_view_t vcmap, const ordinal_t n, const vtx_view_t hn) {
-
-        Kokkos::View<ordinal_t, Device> nvertices_coarse("nvertices");
-
-        vtx_view_t m("matches", n);
-        Kokkos::parallel_for("init heavy samples", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t u){
-            m(u) = ORD_MAX;
-            if (hn(hn(u)) == u) {
-                m(u) = u;
-                if (hn(u) < u) {
-                    m(u) = hn(u);
-                }
-            }
-        });
-        Kokkos::parallel_for("fill heavy samples", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t u){
-            ordinal_t v = hn(u);
-            if (m(v) == ORD_MAX) {
-                Kokkos::atomic_compare_exchange_strong(&m(v), ORD_MAX, v);
-            }
-        });
-        Kokkos::parallel_for("fill heavy samples", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t u){
-            if (m(u) == ORD_MAX) {
-                ordinal_t v = hn(u);
-                m(u) = m(v);
-            }
-        });
-
-        Kokkos::parallel_for("do matching", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t u){
-            ordinal_t p = m(u);
-            while (m(p) != p) {
-                p = m(m(p));
-            }
-            m(u) = p;
-        });
-
-        vtx_view_t dense_map("dense map", n);
-        Kokkos::parallel_for("do matching", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t u){
-            Kokkos::atomic_increment(&dense_map(m(u)));
-        });
-
-        Kokkos::parallel_scan("relabel", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t u, ordinal_t & update, const bool final){
-            if (dense_map(u) > 0) {
-                if (final) {
-                    dense_map(u) = update;
-                }
-                update++;
-            }
-        });
-
-        ordinal_t nc = 0;
-        Kokkos::parallel_reduce("assign coarse vertices", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t u, ordinal_t & local_max){
-            vcmap(u) = dense_map(m(u));
-            if (local_max <= vcmap(u)) {
-                local_max = vcmap(u);
-            }
-        }, Kokkos::Max<ordinal_t, Kokkos::HostSpace>(nc));
-
-        //nc is the largest vertex id, it needs to be one larger
-        nc++;
         return nc;
     }
 
@@ -536,16 +266,16 @@ public:
         return out;
     }
 
-    ordinal_t countInf(vtx_view_t target) {
-        ordinal_t totalInf = 0;
+    ordinal_t countUnmatched(vtx_view_t target) {
+        ordinal_t total = 0;
 
-        Kokkos::parallel_reduce(policy_t(0, target.extent(0)), KOKKOS_LAMBDA(ordinal_t i, ordinal_t & thread_sum) {
+        Kokkos::parallel_reduce("count unmatched", policy_t(0, target.extent(0)), KOKKOS_LAMBDA(ordinal_t i, ordinal_t& update) {
             if (target(i) == ORD_MAX) {
-                thread_sum++;
+                update++;
             }
-        }, totalInf);
+        }, total);
 
-        return totalInf;
+        return total;
     }
 
     template<typename hash_t>
@@ -633,6 +363,7 @@ public:
                 rand_pool.free_state(generator);
             }, r);
             if(!is_uniform){
+                // find max edge weight
                 Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, scalar_t& update){
                     if(!is_initial && vcmap(g.graph.entries(j)) != ORD_MAX) return;
                     if(g.values(j) > update){
@@ -642,6 +373,7 @@ public:
             }
             thread.team_barrier();
             argmax_t argmax{0, end};
+            // select a random adjacent vertex having the max edge weight
             Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, argmax_t& local) {
                 //v must be unmatched to be considered
                 if(!is_initial && vcmap(g.graph.entries(j)) != ORD_MAX) return;
@@ -673,6 +405,7 @@ public:
             rand_pool.free_state(generator);
             scalar_t max_ewt = 0;
             uint32_t tiebreaker = 0;
+            // select a random adjacent vertex having the max edge weight
             for (edge_offset_t j = g.graph.row_map(u); j < g.graph.row_map(u + 1); j++) {
                 ordinal_t v = g.graph.entries(j);
                 //v must be unmatched to be considered
@@ -696,20 +429,16 @@ public:
 
     coarse_map coarsen_match(const matrix_t& g,
         bool uniform_weights, pool_t& rand_pool,
-        ExperimentLoggerUtil<scalar_t>& experiment,
         int match_choice) {
 
         ordinal_t n = g.numRows();
 
-        Kokkos::Timer timer;
         vtx_view_t hn(Kokkos::ViewAllocateWithoutInitializing("heavies"), n);
         vtx_view_t vcmap(Kokkos::ViewAllocateWithoutInitializing("vcmap"), n);
         Kokkos::deep_copy(hn, ORD_MAX);
         Kokkos::deep_copy(vcmap, ORD_MAX);
         vtx_view_t vperm_scratch(Kokkos::ViewAllocateWithoutInitializing("vperm"), n);
         vtx_view_t vperm = vperm_scratch;
-        experiment.addMeasurement(Measurement::Permute, timer.seconds());
-        timer.reset();
 
         if (uniform_weights) {
             //all weights equal at this level so choose heaviest edge randomly
@@ -730,8 +459,6 @@ public:
                 Kokkos::parallel_for("Potential matches (heavy)", policy_t(0, n), matcher);
             }
         }
-        experiment.addMeasurement(Measurement::Heavy, timer.seconds());
-        timer.reset();
         ordinal_t perm_length = n;
         //construct mapping using heaviest edges
         int swap = 1;
@@ -803,7 +530,7 @@ public:
         }
 
         if (match_choice == 1) {
-            ordinal_t unmapped = countInf(vcmap);
+            ordinal_t unmapped = countUnmatched(vcmap);
             double unmappedRatio = static_cast<double>(unmapped) / static_cast<double>(n);
 
             //leaf matches
@@ -829,7 +556,7 @@ public:
                 matchHash<ordinal_t>(unmappedVtx, hashes, nullkey, vcmap);
             }
 
-            unmapped = countInf(vcmap);
+            unmapped = countUnmatched(vcmap);
             unmappedRatio = static_cast<double>(unmapped) / static_cast<double>(n);
 
             //twin matches
@@ -866,7 +593,7 @@ public:
                 matchHash<uint64_t>(unmappedVtx, hashes, nullkey, vcmap);
             }
 
-            unmapped = countInf(vcmap);
+            unmapped = countUnmatched(vcmap);
             unmappedRatio = static_cast<double>(unmapped) / static_cast<double>(n);
 
             //relative matches
@@ -887,6 +614,8 @@ public:
                     ordinal_t h = ORD_MAX;
                     scalar_t max_wgt = 0;
                     ordinal_t min_deg = ORD_MAX;
+
+                    // select the lowest degree adjacent vertex
                     for (edge_offset_t j = g.graph.row_map(u); j < g.graph.row_map(u + 1); j++) {
                         ordinal_t v = g.graph.entries(j);
                         ordinal_t vdeg = g.graph.row_map(v+1) - g.graph.row_map(v);
@@ -932,12 +661,9 @@ public:
             }
         });
 
-        experiment.addMeasurement(Measurement::MapConstruct, timer.seconds());
-        timer.reset();
         coarse_map out;
         out.coarse_vtx = nc;
         out.map = vcmap;
-
         return out;
     }
 };
