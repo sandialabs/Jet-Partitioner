@@ -8,9 +8,14 @@ For details about the algorithm, please see https://arxiv.org/abs/2304.13194
 
 Kokkos (https://github.com/kokkos/kokkos): Enables performance portable parallelism.  
 KokkosKernels (https://github.com/kokkos/kokkos-kernels): Necessary only for KokkosSparse::CrsMatrix class.  
-Metis (https://github.com/KarypisLab/METIS): Used for initial partitioning of coarsest graph.
+Metis (https://github.com/KarypisLab/METIS): Used for initial partitioning of coarsest graph.  
+(Circumstantial) GKLib (https://github.com/KarypisLab/GKlib.git): Needed to link against the github distribution of Metis. Not needed for older distributions of Metis.
 
 ## Usage
+
+### Building
+
+Standard CMake build process. If your Metis build requires GKlib, add "-DLINK_GKLIB=True" to your cmake command when building Jet. Example build scripts are provided for macOS with OpenMP and Linux systems with Cuda. These scripts handle all required dependencies.
 
 ### Executables
 
