@@ -15,7 +15,7 @@ Metis (https://github.com/KarypisLab/METIS): Used for initial partitioning of co
 
 ### Building
 
-Standard CMake build process. If your Metis build requires GKlib, add "-DLINK_GKLIB=True" to your cmake command when building Jet. Example build scripts are provided for macOS with OpenMP and Linux systems with Cuda. These scripts handle all required dependencies.
+Standard CMake build process. If your Metis build requires GKlib, add `-DLINK_GKLIB=True` to your cmake command when building Jet. Example build scripts are provided for macOS with OpenMP and Linux systems with Cuda. These scripts handle all required dependencies.
 
 ### Executables
 
