@@ -82,7 +82,6 @@ public:
     using argmax_reducer_t = Kokkos::MaxLoc<uint32_t, edge_offset_t, Device>;
     using argmax_t = typename argmax_reducer_t::value_type;
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
-    static constexpr ordinal_t ORD_MIN = std::numeric_limits<ordinal_t>::min();
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
 
     struct coarse_map {
@@ -428,8 +427,8 @@ public:
     };
 
     coarse_map coarsen_match(const matrix_t& g,
-        bool uniform_weights, pool_t& rand_pool,
-        int match_choice) {
+        const bool uniform_weights, pool_t& rand_pool,
+        const int match_choice) {
 
         ordinal_t n = g.numRows();
 

@@ -38,7 +38,6 @@
 // ************************************************************************
 #include "contract.hpp"
 #include "uncoarsen.hpp"
-#include "initial_partition.hpp"
 #include "defs.h"
 #include "io.hpp"
 #include <limits>

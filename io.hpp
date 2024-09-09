@@ -61,7 +61,7 @@ bool load_config(config_t& c, const char* config_f) {
     // f >> c.max_imb_ratio;
     // but that doesn't work if there are exactly 3 lines instead of 4 in the config file
     // because if the last line is a float like 3.14, then c.num_iter will contain the 3
-    // and the c.max_imb_ratio will contain the .314
+    // and the c.max_imb_ratio will contain the .14
     for(int i = 0; i < 4; i++){
         if(f >> lines[i]) reads++;
     }
@@ -125,7 +125,6 @@ bool load_metis_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
         header[i] = fast_atoi<size_t>(f);
         while(!isdigit(*f)){
             if(*f == '\n'){
-                //end for loop
                 i = 4;
                 f++;
                 break;
@@ -161,7 +160,7 @@ bool load_metis_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
     ordinal_t rows_read = 0;
     row_map_m(0) = 0;
     bool is_value = false;
-    //ready edge information
+    //read edge information
     while(f < fmax){
         //increment past whitespace
         while(f < fmax && !isdigit(*f)){
