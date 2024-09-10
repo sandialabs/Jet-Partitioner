@@ -79,7 +79,9 @@ public:
     using pool_t = Kokkos::Random_XorShift64_Pool<Device>;
     using gen_t = typename pool_t::generator_type;
     using hasher_t = Kokkos::pod_hash<ordinal_t>;
-    using argmax_reducer_t = Kokkos::MaxLoc<uint32_t, edge_offset_t, Device>;
+    // there is a problem edge-case in kokkos with MaxLoc that can be triggered rarely for any input graph
+    // the problem will be fixed soon, use MaxFirstLoc in meantime
+    using argmax_reducer_t = Kokkos::MaxFirstLoc<uint32_t, edge_offset_t, Device>;
     using argmax_t = typename argmax_reducer_t::value_type;
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
