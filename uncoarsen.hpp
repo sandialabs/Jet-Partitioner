@@ -168,8 +168,6 @@ static part_vt uncoarsen(std::list<clt> cg_list, part_vt coarsest, part_t k, dou
     experiment.setFinestEdgeCut(ec);
     experiment.setLargestPartSize(largest);
     experiment.setSmallestPartSize(smallest);
-    experiment.setMaxPartCut(stat::max_part_cut(cg_list.front().mtx, res, k));
-    experiment.setObjective(stat::comm_size(cg_list.front().mtx, res, k));
     return res;
 }
 };

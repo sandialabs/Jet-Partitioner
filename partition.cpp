@@ -56,6 +56,7 @@ part_vt partition(value_t& edge_cut,
     using init_t = initial_partitioner<matrix_t, part_t>;
     using uncoarsener_t = uncoarsener<matrix_t, part_t>;
     using coarse_level_triple = typename coarsener_t::coarse_level_triple;
+    using stat = part_stat<matrix_t, part_t>;
     coarsener_t coarsener;
 
     std::list<coarse_level_triple> cg_list;
@@ -103,6 +104,10 @@ part_vt partition(value_t& edge_cut,
     experiment.addMeasurement(Measurement::Total, fin_time - start_time);
     experiment.addMeasurement(Measurement::Coarsen, fin_coarsening_time - start_time);
     experiment.addMeasurement(Measurement::FreeGraph, fin_time - fin_uncoarsening);
+    
+    // additional partition statistics
+    experiment.setMaxPartCut(stat::max_part_cut(g, part, k));
+    experiment.setObjective(stat::comm_size(g, part, k));
 
     experiment.refinementReport();
     experiment.verboseReport();
