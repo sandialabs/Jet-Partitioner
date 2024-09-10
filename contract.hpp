@@ -103,6 +103,16 @@ public:
     ordinal_t coarse_vtx_cutoff = 1000;
     ordinal_t min_allowed_vtx = 250;
     unsigned int max_levels = 200;
+    const ordinal_t large_row_threshold = 1000;
+    
+bool has_large_row(const matrix_t g){
+    ordinal_t max_row = 0;
+    Kokkos::parallel_reduce("find max row", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update){
+        ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
+        if(degree > update) update = degree;
+    }, Kokkos::Max<ordinal_t, Kokkos::HostSpace>(max_row));
+    return (max_row >= large_row_threshold);
+}
 
 bool should_use_dyn(const ordinal_t n, const Kokkos::View<const edge_offset_t*, Device> work, int t_count){
     bool use_dyn = false;
@@ -363,11 +373,13 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     vtx_view_t htable(Kokkos::ViewAllocateWithoutInitializing("hashtable keys"), hash_size);
     Kokkos::deep_copy(htable, -1);
     wgt_view_t hvals("hashtable values", hash_size);
+    // use thread teams on gpu when graph/coarse graph has decent average degree or very large max degree
+    bool use_team = (!is_host_space && (hash_size / nc >= 12 || has_large_row(g)));
     //insert each coarse vertex into a bucket determined by a hash
     //use linear probing to resolve conflicts
     //combine weights using atomic addition
     combineAndDedupe cnd(g, vcmap.map, htable, hvals, hrow_map);
-    if(!is_host_space && hash_size / n >= 12) {
+    if(use_team) {
         Kokkos::parallel_for("deduplicate", team_policy_t(n, Kokkos::AUTO), cnd);
     } else {
         bool use_dyn = should_use_dyn(n, g.graph.row_map, exec_space().concurrency());
@@ -382,7 +394,7 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     timer.reset();
     edge_view_t coarse_row_map_f("edges_per_source", nc + 1);
     countUnique cu(htable, hrow_map, coarse_row_map_f);
-    if(!is_host_space && hash_size / nc >= 12) {
+    if(use_team) {
         Kokkos::parallel_for("count unique", team_policy_t(nc, Kokkos::AUTO), cu);
     } else {
         Kokkos::parallel_for("count unique", policy_t(0, nc), cu);
@@ -403,7 +415,7 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     vtx_view_t entries_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse entries"), hash_size);
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
     consolidateUnique consolidate(htable, entries_coarse, hvals, wgts_coarse, hrow_map, coarse_row_map_f);
-    if(!is_host_space && hash_size / nc >= 12) {
+    if(use_team) {
         Kokkos::parallel_for("consolidate", team_policy_t(nc, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(4*sizeof(ordinal_t))), consolidate);
     } else {
         bool use_dyn = should_use_dyn(nc, hrow_map, exec_space().concurrency());
