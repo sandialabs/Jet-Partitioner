@@ -373,8 +373,8 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     vtx_view_t htable(Kokkos::ViewAllocateWithoutInitializing("hashtable keys"), hash_size);
     Kokkos::deep_copy(htable, -1);
     wgt_view_t hvals("hashtable values", hash_size);
-    // use thread teams on gpu when graph/coarse graph has decent average degree or very large max degree
-    bool use_team = (!is_host_space && (hash_size / nc >= 12 || has_large_row(g)));
+    // use thread teams on gpu when graph has decent average degree or very large max degree
+    bool use_team = (!is_host_space && (hash_size / n >= 12 || has_large_row(g)));
     //insert each coarse vertex into a bucket determined by a hash
     //use linear probing to resolve conflicts
     //combine weights using atomic addition
