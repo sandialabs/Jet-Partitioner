@@ -381,6 +381,7 @@ public:
                 if(is_uniform || g.values(j) == max_ewt){
                     uint32_t v = g.graph.entries(j);
                     uint32_t tiebreaker = xorshiftHash<uint32_t>(v + r);
+                    // >= since 0 must be a valid max val
                     if(tiebreaker >= local.val){
                         local.val = tiebreaker;
                         local.loc = j;
@@ -417,7 +418,8 @@ public:
                         tiebreaker = xorshiftHash<uint32_t>(v + r);
                     } else if(is_uniform || max_ewt == g.values(j)){
                         uint32_t sim_wgt = xorshiftHash<uint32_t>(v + r);
-                        if(tiebreaker < sim_wgt){
+                        // >= since 0 must be a valid max tiebreaker
+                        if(sim_wgt >= tiebreaker){
                             h = v;
                             tiebreaker = sim_wgt;
                         }
