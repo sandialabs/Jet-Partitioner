@@ -1,5 +1,4 @@
 # This is an example script to build our code and its dependencies for an ubuntu system with H100 GPU
-# using homebrew clang (Apple clang doesn't support openmp)
 loc=$PWD/container
 ipwd=$PWD
 # need to use nvcc_wrapper to compile kokkos + kokkos-kernels
