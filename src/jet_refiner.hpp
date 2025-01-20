@@ -949,8 +949,7 @@ void perform_moves(const problem& prob, part_vt part, const vtx_vt swaps, const 
     //this whole mess avoids 2 stream-syncs on the 3 reductions in this function
     //by combining their data movements to host together
     int64_t cut_change = scratch.cut_change2() + scratch.cut_change1();
-    gain_t max_size = scratch.max_part();
-    curr_state.total_imb = max_size > prob.opt ? max_size - prob.opt : 0;
+    curr_state.total_imb = scratch.max_part();
     curr_state.cut -= cut_change;
 } 
 
@@ -1070,13 +1069,11 @@ void jet_refine(const matrix_t g, const config_t& config, wgt_vt vtx_w, part_vt 
     prob.size_max = prob.opt*imb_ratio;
     if(!best_state.init){
         best_state.init = true;
-        gain_t max_size = stat::largest_part_size(best_state.part_sizes);
-        best_state.total_imb = max_size > prob.opt ? max_size - prob.opt : 0;
+        best_state.total_imb = stat::largest_part_size(best_state.part_sizes);
         std::cout << "Initial " << std::fixed << (best_state.cut / 2) << " " << std::setprecision(6) << (static_cast<double>(best_state.total_imb) / static_cast<double>(prob.opt)) << " ";
         std::cout << g.numRows() << std::endl;
     }
     refine_data curr_state = clone_refine_data(best_state);
-    gain_t imb_max = prob.size_max - prob.opt;
     part_vt part(Kokkos::ViewAllocateWithoutInitializing("current partition"), g.numRows());
     Kokkos::deep_copy(exec_space(), part, best_part);
     conn_data cdata = init_conn_data(perm_cdata, g, part, k);
@@ -1104,7 +1101,7 @@ void jet_refine(const matrix_t g, const config_t& config, wgt_vt vtx_w, part_vt 
         while(count++ <= 11){
             iter_count++;
             vtx_vt moves;
-            if(curr_state.total_imb <= imb_max){
+            if(curr_state.total_imb <= prob.size_max){
                 moves = jet_lp(prob, part, cdata, scratch, filter_ratio);
                 balance_counter = 0;
                 lab_counter++;
@@ -1118,11 +1115,11 @@ void jet_refine(const matrix_t g, const config_t& config, wgt_vt vtx_w, part_vt 
             }
             perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state);
             //copy current partition and relevant data to output partition if following conditions pass
-            if(best_state.total_imb > imb_max && curr_state.total_imb < best_state.total_imb){
+            if(best_state.total_imb > prob.size_max && curr_state.total_imb < best_state.total_imb){
                 copy_refine_data(best_state, curr_state);
                 Kokkos::deep_copy(exec_space(), best_part, part);
                 count = 0;
-            } else if(curr_state.cut < best_state.cut && (curr_state.total_imb <= imb_max || curr_state.total_imb <= best_state.total_imb)){
+            } else if(curr_state.cut < best_state.cut && (curr_state.total_imb <= prob.size_max || curr_state.total_imb <= best_state.total_imb)){
                 //do not reset counter if cut improvement is too small
                 if(curr_state.cut < tol*best_state.cut){
                     count = 0;
