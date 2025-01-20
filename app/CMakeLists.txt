@@ -9,12 +9,9 @@ add_executable(jet_export driver.cpp)
 add_executable(jet_serial driver.cpp)
 add_executable(pstat part_eval.cpp)
 
-
-foreach(prog jet_ex jet4 jet2 jet_host jet_import jet_export jet_serial pstat)
-    target_include_directories(${prog} PRIVATE ${CMAKE_SOURCE_DIR}/header)
+foreach(prog jet_import pstat)
+    target_include_directories(${prog} PRIVATE ${CMAKE_SOURCE_DIR}/header ${CMAKE_SOURCE_DIR}/src)
 endforeach(prog)
-target_include_directories(jet_import PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_include_directories(pstat PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
 # compile definitions to set exe behavior
 target_compile_definitions(jet4 PUBLIC FOUR9)
