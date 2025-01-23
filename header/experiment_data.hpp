@@ -40,6 +40,7 @@
 #include <vector>
 #include <stdlib.h>
 #include <iostream>
+#include <iomanip>
 #include <fstream>
 #include <string>
 #include <map>
@@ -71,7 +72,7 @@ enum class Measurement : int {
 };
 
 template <typename scalar_t>
-class ExperimentLoggerUtil {
+class experiment_data {
 
 public:
 	std::vector<std::string> measurementNames{
@@ -132,7 +133,7 @@ private:
     int64_t obj = 0;
 
 public:
-	ExperimentLoggerUtil() :
+	experiment_data() :
 		measurements(static_cast<int>(Measurement::END), 0.0)
 	{}
 
@@ -216,6 +217,11 @@ public:
         std::cout << " - Coarsening contraction time: " << getMeasurement(Measurement::Build) << std::endl;
         std::cout << "Initial partitioning time: " << getMeasurement(Measurement::InitPartition) << std::endl;
         std::cout << "Uncoarsening time: " << getMeasurement(Measurement::Refine) << std::endl;
+        double aux_time = getMeasurement(Measurement::Refine);
+        for(auto level : coarseLevels){
+            aux_time -= level.totalRefTime;
+        }
+        std::cout << " - Projection and Memory De/Allocation time: " << aux_time << std::endl;
         std::cout << "Coarse graph free time: " << getMeasurement(Measurement::FreeGraph) << std::endl;
         std::cout << "Total Partitioning Time: " << getMeasurement(Measurement::Total) << std::endl;
         std::cout << "Comm size: " << obj << std::endl;

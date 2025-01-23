@@ -38,12 +38,9 @@
 // ************************************************************************
 #pragma once
 #include <type_traits>
-#include <limits>
-#include <iostream>
-#include <iomanip>
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
-#include "ExperimentLoggerUtil.hpp"
+#include "experiment_data.hpp"
 
 namespace jet_partitioner {
 
@@ -61,17 +58,15 @@ public:
     // need some trickery because make_signed is undefined for floating point types
     using matrix_t = crsMat;
     using exec_space = typename matrix_t::execution_space;
-    using mem_space = typename matrix_t::memory_space;
     using Device = typename matrix_t::device_type;
     using ordinal_t = typename matrix_t::ordinal_type;
     using edge_offset_t = typename matrix_t::size_type;
-    using edge_view_t = Kokkos::View<edge_offset_t*, Device>;
+    using edge_vt = Kokkos::View<edge_offset_t*, Device>;
     using scalar_t = typename matrix_t::value_type;
     using gain_t = typename std::conditional_t<std::is_signed_v<scalar_t>, type_identity<scalar_t>, std::make_signed<scalar_t>>::type;
-    using vtx_view_t = Kokkos::View<ordinal_t*, Device>;
-    using wgt_view_t = Kokkos::View<scalar_t*, Device>;
+    using wgt_vt = Kokkos::View<scalar_t*, Device>;
     using gain_vt = Kokkos::View<gain_t*, Device>;
-    using gain_svt = Kokkos::View<gain_t, Device>;
+    using gain_pin_st = Kokkos::View<gain_t, Kokkos::SharedHostPinnedSpace>;
     using gain_2vt = Kokkos::View<gain_t**, Device>;
     using part_vt = Kokkos::View<part_t*, Device>;
     using policy_t = Kokkos::RangePolicy<exec_space>;
@@ -148,7 +143,7 @@ static gain_vt cut_per_part(const matrix_t g, const part_vt partition, const par
     return heatmap;
 }
 
-static gain_vt get_part_sizes(const matrix_t g, const wgt_view_t vtx_w, const part_vt partition, part_t k){
+static gain_vt get_part_sizes(const matrix_t g, const wgt_vt vtx_w, const part_vt partition, part_t k){
     gain_vt part_size("part sizes", k);
     Kokkos::parallel_for("calc part sizes", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
         part_t p = partition(i);
@@ -158,7 +153,7 @@ static gain_vt get_part_sizes(const matrix_t g, const wgt_view_t vtx_w, const pa
 }
 
 //get sum of vertex weights
-static scalar_t get_total_size(const matrix_t g, const wgt_view_t vtx_w){
+static scalar_t get_total_size(const matrix_t g, const wgt_vt vtx_w){
     scalar_t total_size = 0;
     Kokkos::parallel_reduce("sum of vertex weights", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, scalar_t& update){
         update += vtx_w(i);
@@ -176,12 +171,12 @@ static gain_t largest_part_size(const gain_vt& ps){
     return result;
 }
 
-static void stash_largest(const gain_vt& ps, gain_svt& result){
+static void stash_largest(const gain_vt& ps, gain_pin_st& result){
     Kokkos::parallel_reduce("get max part size (store in view)", policy_t(0, ps.extent(0)), KOKKOS_LAMBDA(const ordinal_t i, gain_t& update){
         if(ps(i) > update){
             update = ps(i);
         }
-    }, Kokkos::Max<gain_t, typename gain_svt::memory_space>(result));
+    }, Kokkos::Max<gain_t, typename gain_pin_st::memory_space>(result));
 }
 
 static gain_t max_part_cut(const matrix_t g, part_vt part, const part_t k){
@@ -190,7 +185,7 @@ static gain_t max_part_cut(const matrix_t g, part_vt part, const part_t k){
 
 static scalar_t comm_size(const matrix_t& g, const part_vt& part, part_t k){
     ordinal_t n = g.numRows();
-    edge_view_t conn_offsets("comp offsets", n + 1);
+    edge_vt conn_offsets("comp offsets", n + 1);
     Kokkos::parallel_for("comp conn row size", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t& i){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
         if(degree > static_cast<ordinal_t>(k)) degree = k;

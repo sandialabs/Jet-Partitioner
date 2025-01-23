@@ -37,7 +37,7 @@
 //
 // ************************************************************************
 #include "part_stat.hpp"
-#include "defs.h"
+#include "jet_defs.h"
 #include "io.hpp"
 #include <limits>
 
@@ -62,12 +62,14 @@ int main(int argc, char **argv) {
         bool uniform_ew = false;
         if(!load_metis_graph(g, uniform_ew, filename)) return -1;
         std::cout << "vertices: " << g.numRows() << "; edges: " << g.nnz() / 2 << std::endl;
-        wgt_view_t vweights("vertex weights", g.numRows());
+        wgt_vt vweights("vertex weights", g.numRows());
         Kokkos::deep_copy(vweights, 1);
 
         part_vt part = load_part(g.numRows(), part_file);
         using stat = part_stat<matrix_t, part_t>; 
         using h_t = stat::gain_2vt;
+        using gain_t = stat::gain_t;
+        using gain_vt = stat::gain_vt;
         value_t cut = stat::get_total_cut(g, part);
         h_t heatmap_d = stat::cut_heatmap(g, part, k);
         h_t::HostMirror heatmap = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), heatmap_d);

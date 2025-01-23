@@ -37,69 +37,63 @@
 //
 // ************************************************************************
 #include "contract.hpp"
-#include "uncoarsen.hpp"
-#include "initial_partition.hpp"
+#include <cstdlib>
+#include <Kokkos_Core.hpp>
+#include "KokkosSparse_CrsMatrix.hpp"
 
 namespace jet_partitioner {
 
 template<class crsMat, typename part_t>
-class partitioner {
+class binary_dump {
 public:
-
+    // define internal types
     using matrix_t = crsMat;
-    using exec_space = typename matrix_t::execution_space;
-    using mem_space = typename matrix_t::memory_space;
     using Device = typename matrix_t::device_type;
     using ordinal_t = typename matrix_t::ordinal_type;
     using edge_offset_t = typename matrix_t::size_type;
     using scalar_t = typename matrix_t::value_type;
-    using vtx_view_t = Kokkos::View<ordinal_t*, Device>;
-    using wgt_view_t = Kokkos::View<scalar_t*, Device>;
-    using edge_view_t = Kokkos::View<edge_offset_t*, Device>;
     using part_vt = Kokkos::View<part_t*, Device>;
     using coarsener_t = contracter<matrix_t>;
-    using init_t = initial_partitioner<matrix_t, part_t>;
-    using uncoarsener_t = uncoarsener<matrix_t, part_t>;
-    using coarse_level_triple = typename coarsener_t::coarse_level_triple;
+    using clt = typename coarsener_t::coarse_level_triple;
 
-static part_vt partition(matrix_t g, wgt_view_t vweights, const part_t k, const double imb_ratio, bool uniform_ew,
-                                  ExperimentLoggerUtil<scalar_t>& experiment) {
-
-    coarsener_t coarsener;
-
-    std::list<coarse_level_triple> cg_list;
-    Kokkos::Timer t;
-    double start_time = t.seconds();
-
-    //coarsener.set_heuristic(coarsener_t::HECv1);
-    coarsener.set_heuristic(coarsener_t::MtMetis);
-    int cutoff = k*8;
-    if(cutoff > 1024){
-        cutoff = k*2;
-        cutoff = std::max(1024, cutoff);
+//writes a sequence of coarse graphs and mappings between each graph to binary file
+//used to control for coarsening when experimenting with refinement
+static void dump_coarse(std::list<clt> levels){
+    FILE* cgfp = fopen("coarse_graphs.out", "w");
+    int size = levels.size();
+    fwrite(&size, sizeof(int), 1, cgfp);
+    ordinal_t prev_n = 0;
+    for(auto level : levels){
+        matrix_t g = level.mtx;
+        ordinal_t N = g.numRows();
+        edge_offset_t M = g.nnz();
+        auto rows = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), g.graph.row_map);
+        auto entries = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), g.graph.entries);
+        auto values = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), g.values);
+        auto vtx_wgts = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), level.vtx_w);
+        fwrite(&N, sizeof(ordinal_t), 1, cgfp);
+        fwrite(&M, sizeof(edge_offset_t), 1, cgfp);
+        fwrite(rows.data(), sizeof(edge_offset_t), N+1, cgfp);
+        fwrite(entries.data(), sizeof(ordinal_t), M, cgfp);
+        fwrite(values.data(), sizeof(scalar_t), M, cgfp);
+        fwrite(vtx_wgts.data(), sizeof(scalar_t), N, cgfp);
+        if(level.level > 1){
+            typename jet_partitioner::contracter<matrix_t>::coarse_map interp_mtx = level.interp_mtx;
+            auto i_entries = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), interp_mtx.map);
+            fwrite(i_entries.data(), sizeof(ordinal_t), prev_n, cgfp);
+        }
+        prev_n = N;
     }
-    coarsener.set_coarse_vtx_cutoff(cutoff);
-    coarsener.set_min_allowed_vtx(cutoff / 4);
-    cg_list = coarsener.generate_coarse_graphs(g, vweights, experiment, uniform_ew);
-    Kokkos::fence();
-    double fin_coarsening_time = t.seconds();
-    experiment.addMeasurement(Measurement::Coarsen, fin_coarsening_time - start_time);
-    part_vt coarsest_p = init_t::metis_init(cg_list.back().mtx, cg_list.back().vtx_w, k, imb_ratio);
-    //part_vt coarsest_p = init_t::random_init(cg_list.back().vtx_w, k, imb_ratio);
-    Kokkos::fence();
-    experiment.addMeasurement(Measurement::InitPartition, t.seconds() - fin_coarsening_time);
-    scalar_t edge_cut = 0;
-    part_vt part = uncoarsener_t::uncoarsen(cg_list, coarsest_p, k, imb_ratio
-        , edge_cut, experiment);
+    fclose(cgfp);
+}
 
-    Kokkos::fence();
-    cg_list.clear();
-    Kokkos::fence();
-    double fin_time = t.seconds();
-    experiment.addMeasurement(Measurement::Total, fin_time - start_time);
-
-    return part;
+//writes part to binary file
+static void dump_coarse_part(part_vt part){
+    FILE* cgfp = fopen("coarse_part.out", "wb");
+    ordinal_t n = part.extent(0);
+    auto part_m = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), part);
+    fwrite(part_m.data(), sizeof(part_t), n, cgfp);
+    fclose(cgfp);
 }
 };
-
 }
