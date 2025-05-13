@@ -12,6 +12,8 @@ KokkosKernels (https://github.com/kokkos/kokkos-kernels): Necessary only for Kok
 Metis (https://github.com/KarypisLab/METIS): Used for initial partitioning of coarsest graph.  
 (Circumstantial) GKLib (https://github.com/KarypisLab/GKlib.git): Needed to link against the github distribution of Metis. Not needed for older distributions of Metis.
 
+Note that all these dependencies are open source. If the Metis dependency is an issue, please contact the authors to obtain a Metis-free variant.
+
 ## Usage
 
 ### Building
@@ -31,11 +33,12 @@ jet\_serial: jet but runs on the host on a single thread.
 pstat: Given a metis graph file, partition file, and k-value, will print out quality information on the partition.
 
 ### Using Jet Partitioner in Your Code
-We provide a cmake package that you can install on your system. Add `find_package(jet CONFIG REQUIRED)` to your project's CMakeLists.txt file and link your executable/s to `jet::jet`. Include `jet.h` in your code to use one of the provided partitioning functions. Each function is distinguished by the target Kokkos execution space it will run in and the type of KokkosKernels CrsMatrix which it accepts. Reference `jet_defs.h` for the relevant template definitions of these parameters. You can set the desired part count and imbalance values on the input config_t struct (see `jet_config.h` for other parameters).
+We provide a cmake package that you can install on your system. Add `find_package(jet CONFIG REQUIRED)` to your project's CMakeLists.txt file and link your executable/s to `jet::jet`. Include `jet.h` in your code to use one of the provided partitioning functions. Each function is distinguished by the target Kokkos execution space it will run in and the type of KokkosKernels CrsMatrix which it accepts. (If you have a graph in another format, you must first build a KokkosKernels CrsMatrix.) Reference `jet_defs.h` for the relevant template definitions of these parameters. You can set the desired part count and imbalance values on the input config_t struct (see `jet_config.h` for other parameters).
 
 #### Tips
 On Linux systems, you can create a file `~/.cmake/packages/jet/find.txt` that cmake will automatically use to find the jet cmake package.
-Inside this file, add the full path to the jet install directory.
+Inside this file, add the full path to the jet install directory. 
+Jet works both with 32-bit and 64-bit integers. See `jet_defs.h` for details.
 
 ### Input Format
 The partitioner executables accept graphs stored in the metis graph file format. We do not yet support vertex weights within metis graph files.
